@@ -46,10 +46,12 @@ public class EfCoreVtxoStorage : IVtxoStorage
         entity.Recoverable = vtxo.Swept;
         entity.SeenAt = vtxo.CreatedAt;
         entity.ExpiresAt = vtxo.ExpiresAt ?? DateTimeOffset.MaxValue;
+        entity.ExpiresAtHeight = vtxo.ExpiresAtHeight;
         entity.Preconfirmed = vtxo.Preconfirmed;
         entity.Unrolled = vtxo.Unrolled;
         entity.CommitmentTxids = vtxo.CommitmentTxids is { Count: > 0 } ? JsonSerializer.Serialize(vtxo.CommitmentTxids) : null;
         entity.ArkTxid = vtxo.ArkTxid;
+        entity.AssetsJson = vtxo.Assets is { Count: > 0 } ? JsonSerializer.Serialize(vtxo.Assets) : null;
 
         if (isNew)
         {
@@ -144,11 +146,12 @@ public class EfCoreVtxoStorage : IVtxoStorage
             Swept: entity.Recoverable,
             CreatedAt: entity.SeenAt,
             ExpiresAt: entity.ExpiresAt == DateTimeOffset.MaxValue ? null : entity.ExpiresAt,
-            ExpiresAtHeight: null,
+            ExpiresAtHeight: entity.ExpiresAtHeight,
             Preconfirmed: entity.Preconfirmed,
             Unrolled: entity.Unrolled,
             CommitmentTxids: string.IsNullOrEmpty(entity.CommitmentTxids) ? null : JsonSerializer.Deserialize<List<string>>(entity.CommitmentTxids),
-            ArkTxid: entity.ArkTxid
+            ArkTxid: entity.ArkTxid,
+            Assets: string.IsNullOrEmpty(entity.AssetsJson) ? null : JsonSerializer.Deserialize<List<VtxoAsset>>(entity.AssetsJson)
         );
     }
 }

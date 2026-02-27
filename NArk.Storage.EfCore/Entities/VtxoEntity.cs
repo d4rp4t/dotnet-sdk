@@ -19,6 +19,7 @@ public class VtxoEntity
     public bool Unrolled { get; set; }
     public string? CommitmentTxids { get; set; }
     public string? ArkTxid { get; set; }
+    public string? AssetsJson { get; set; }
 
     public virtual ICollection<ArkIntentVtxoEntity> IntentVtxos { get; set; } = null!;
 
