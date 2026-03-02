@@ -37,14 +37,14 @@ public class SingleKeyAddressProvider(
         CancellationToken cancellationToken = default)
     {
         var info = await transport.GetServerInfoAsync(cancellationToken);
+        var signingDescriptor = await GetNextSigningDescriptor(cancellationToken);
         ArkContract? result = null;
         if (purpose == NextContractPurpose.SendToSelf && sweepingAddress is not null)
         {
             result = new UnknownArkContract(sweepingAddress, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
             activityState = ContractActivityState.Inactive;
         }
-        var signingDescriptor = await GetNextSigningDescriptor(cancellationToken);
-        if (purpose == NextContractPurpose.SendToSelf)
+        else if (purpose == NextContractPurpose.SendToSelf)
         {
             result = new ArkPaymentContract(info.SignerKey, info.UnilateralExit, signingDescriptor);
             activityState = ContractActivityState.Active;

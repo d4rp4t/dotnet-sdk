@@ -57,14 +57,26 @@ public static class WalletFactory
 
     public static string GetOutputDescriptorFromNsec(string nsec)
     {
-        var encoder2 = Bech32Encoder.ExtractEncoderFromString(nsec);
-        encoder2.StrictLength = false;
-        encoder2.SquashBytes = true;
-        var keyData2 = encoder2.DecodeDataRaw(nsec, out _);
-        var privKey = ECPrivKey.Create(keyData2);
-
+        var privKey = DecodeNsecPrivKey(nsec);
         var outputDescriptor = $"tr({privKey.CreatePubKey().ToBytes().ToHexStringLower()})";
         return outputDescriptor;
+    }
+
+    public static string[] GetAlternateWalletIdsFromNsec(string nsec)
+    {
+        var privKey = DecodeNsecPrivKey(nsec);
+        var compressed = privKey.CreatePubKey().ToBytes().ToHexStringLower();
+        var xonly = privKey.CreateXOnlyPubKey().ToBytes().ToHexStringLower();
+        return [compressed, xonly, $"tr({xonly})"];
+    }
+
+    private static ECPrivKey DecodeNsecPrivKey(string nsec)
+    {
+        var encoder = Bech32Encoder.ExtractEncoderFromString(nsec);
+        encoder.StrictLength = false;
+        encoder.SquashBytes = true;
+        var keyData = encoder.DecodeDataRaw(nsec, out _);
+        return ECPrivKey.Create(keyData);
     }
 
     private static ArkWalletInfo CreateHdWallet(
