@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package fulmine.v1;
+
+option csharp_namespace = "Fulmine.V1";
+
+import "google/api/annotations.proto";
+
+// DelegatorService defines the public RPCs that clients can consume to delegate the refresh of
+// their VTXO set
+service DelegatorService {
+  // GetDelegatorInfo returns info about the delegator contract
+  rpc GetDelegatorInfo(GetDelegatorInfoRequest) returns (GetDelegatorInfoResponse) {
+    option (google.api.http) = {
+      get: "/v1/delegator/info"
+    };
+  };
+
+  // Delegate is consumed by clients to request the delegation of the refresh of their VTXOs
+  rpc Delegate(DelegateRequest) returns (DelegateResponse) {
+    option (google.api.http) = {
+      post: "/v1/delegate"
+      body: "*"
+    };
+  };
+}
+
+message GetDelegatorInfoRequest {}
+
+message GetDelegatorInfoResponse {
+  string pubkey = 1;
+  string fee = 2;
+  string delegator_address = 3;
+}
+
+message DelegateRequest {
+  DelegateIntent intent = 1;
+  repeated string forfeit_txs = 2;
+  bool reject_replace = 3;
+}
+
+message DelegateResponse {}
+
+message DelegateIntent {
+  string message = 1;
+  string proof = 2;
+}

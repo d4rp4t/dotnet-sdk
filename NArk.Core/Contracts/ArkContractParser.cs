@@ -14,6 +14,7 @@ public class ArkContractParser
         Parsers.Add(new GenericArkContractParser(HashLockedArkPaymentContract.ContractType, HashLockedArkPaymentContract.Parse));
         Parsers.Add(new GenericArkContractParser(VHTLCContract.ContractType, VHTLCContract.Parse));
         Parsers.Add(new GenericArkContractParser(ArkNoteContract.ContractType, ArkNoteContract.Parse));
+        Parsers.Add(new GenericArkContractParser(ArkDelegateContract.ContractType, ArkDelegateContract.Parse));
         Parsers.Add(new GenericArkContractParser(UnknownArkContract.ContractType, UnknownArkContract.Parse));
     }
     public static ArkContract? Parse(string contract, Network network)

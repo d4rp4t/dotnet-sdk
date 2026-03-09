@@ -250,6 +250,49 @@ var details = await transport.GetAssetDetailsAsync(assetId);
 // details.Metadata — key-value metadata (if set during issuance)
 ```
 
+## Delegation
+
+Delegation solves the VTXO liveness problem — VTXOs expire if not refreshed. A delegate service (e.g., [Fulmine](https://github.com/ArkLabsHQ/fulmine)) pre-signs renewal artifacts on the user's behalf, keeping VTXOs alive without user interaction.
+
+### Setup
+
+Register delegation services alongside core services:
+
+```csharp
+// IServiceCollection — delegation transformer is registered by AddArkCoreServices()
+services.AddArkCoreServices();
+
+// Connect to a delegator service (e.g., Fulmine)
+services.AddArkDelegation("http://localhost:7011");
+```
+
+### Delegate VTXOs
+
+```csharp
+// Get VTXOs to delegate
+var coins = await spendingService.GetAvailableCoins(walletId);
+var vtxos = coins.Select(c => c.Vtxo).ToList();
+
+// Delegate to the configured delegator
+var result = await delegationService.DelegateAsync(
+    walletId,
+    vtxos,
+    destination: myArkAddress);
+
+// result.DelegatedOutpoints — successfully delegated
+// result.FailedOutpoints    — could not be delegated (e.g., unsupported contract type)
+```
+
+### Custom Contract Delegation
+
+The SDK uses an `IDelegationTransformer` pattern to support delegating different contract types. The built-in `DelegateContractDelegationTransformer` handles `ArkDelegateContract` VTXOs. Register additional transformers for other contract types:
+
+```csharp
+services.AddTransient<IDelegationTransformer, MyCustomDelegationTransformer>();
+```
+
+Each transformer implements `CanDelegate` (check if it handles the contract type) and `Transform` (return an `ArkCoin` with the correct spending path for delegation).
+
 ## Collaborative Exits (On-chain)
 
 Move funds from Ark back to the Bitcoin base layer:
@@ -445,6 +488,7 @@ The SDK uses a pluggable architecture. Register your implementations for:
 | `ICoinSelector` | UTXO selection strategy | `DefaultCoinSelector` |
 | `ISweepPolicy` | VTXO consolidation rules | Register zero or more |
 | `IContractTransformer` | Custom contract &rarr; coin transforms | Register zero or more |
+| `IDelegationTransformer` | Custom contract &rarr; delegation coin | `DelegateContractDelegationTransformer` |
 | `IEventHandler<T>` | React to batch/sweep/spend events | Register zero or more |
 
 ## Local Development

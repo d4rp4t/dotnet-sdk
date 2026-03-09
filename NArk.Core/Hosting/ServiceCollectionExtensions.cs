@@ -7,6 +7,7 @@ using NArk.Core.Fees;
 using NArk.Core.Models.Options;
 using NArk.Core.Services;
 using NArk.Core.Sweeper;
+using NArk.Abstractions.Services;
 using NArk.Core.Transformers;
 using NArk.Core.Transport;
 using NArk.Transport.GrpcClient;
@@ -86,6 +87,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ICoinSelector, DefaultCoinSelector>();
         services.AddHostedService<ArkHostedLifecycle>();
 
+        // Delegation
+        services.AddTransient<IDelegationTransformer, DelegateContractDelegationTransformer>();
+        services.AddSingleton<DelegationService>();
+
         // VTXO polling - automatically poll for updates after batch success and spend transactions
         services.AddVtxoPolling();
 
@@ -133,6 +138,18 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddArkRegtest(this IServiceCollection services)
         => services.AddArkNetwork(ArkNetworkConfig.Regtest);
+
+    /// <summary>
+    /// Registers a gRPC-based delegator provider for VTXO delegation.
+    /// Call this in addition to <see cref="AddArkCoreServices"/> when delegation is needed.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="delegatorUri">The URI of the Fulmine delegator gRPC endpoint.</param>
+    public static IServiceCollection AddArkDelegation(this IServiceCollection services, string delegatorUri)
+    {
+        services.AddSingleton<IDelegatorProvider>(_ => new GrpcDelegatorProvider(delegatorUri));
+        return services;
+    }
 
     /// <summary>
     /// Registers VTXO polling event handlers that automatically poll for VTXO updates
