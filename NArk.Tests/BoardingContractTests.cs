@@ -52,7 +52,7 @@ public class BoardingContractTests
         var contract1 = new ArkBoardingContract(TestServerKey, DefaultExitDelay, TestUserKey);
         var contract2 = new ArkBoardingContract(TestServerKey, DefaultExitDelay, TestUserKey);
 
-        Assert.That(contract1.GetScriptPubKeyHex(), Is.EqualTo(contract2.GetScriptPubKeyHex()));
+        Assert.That(contract1.GetScriptPubKey().ToHex(), Is.EqualTo(contract2.GetScriptPubKey().ToHex()));
         Assert.That(contract1.GetOnchainAddress(Network.RegTest).ToString(),
             Is.EqualTo(contract2.GetOnchainAddress(Network.RegTest).ToString()));
     }
@@ -63,7 +63,7 @@ public class BoardingContractTests
         var contract1 = new ArkBoardingContract(TestServerKey, DefaultExitDelay, TestUserKey);
         var contract2 = new ArkBoardingContract(TestServerKey, DefaultExitDelay, DifferentUserKey);
 
-        Assert.That(contract1.GetScriptPubKeyHex(), Is.Not.EqualTo(contract2.GetScriptPubKeyHex()));
+        Assert.That(contract1.GetScriptPubKey().ToHex(), Is.Not.EqualTo(contract2.GetScriptPubKey().ToHex()));
     }
 
     [Test]
@@ -75,7 +75,7 @@ public class BoardingContractTests
         // Parse back from entity contract data
         var parsed = (ArkBoardingContract)ArkBoardingContract.Parse(entity.AdditionalData, Network.RegTest);
 
-        Assert.That(parsed.GetScriptPubKeyHex(), Is.EqualTo(original.GetScriptPubKeyHex()));
+        Assert.That(parsed.GetScriptPubKey().ToHex(), Is.EqualTo(original.GetScriptPubKey().ToHex()));
         Assert.That(parsed.GetOnchainAddress(Network.RegTest).ToString(),
             Is.EqualTo(original.GetOnchainAddress(Network.RegTest).ToString()));
     }

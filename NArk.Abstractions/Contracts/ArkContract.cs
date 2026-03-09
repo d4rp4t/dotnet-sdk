@@ -44,13 +44,13 @@ public abstract class ArkContract(OutputDescriptor server)
     }
 
     /// <summary>
-    /// Returns the taproot scriptPubKey hex for this contract.
+    /// Returns the taproot scriptPubKey for this contract.
     /// Unlike <see cref="GetArkAddress"/>, this works for all contract types including boarding.
     /// </summary>
-    public virtual string GetScriptPubKeyHex()
+    public virtual Script GetScriptPubKey()
     {
         var spendInfo = GetTaprootSpendInfo();
-        return spendInfo.OutputPubKey.ScriptPubKey.ToHex();
+        return spendInfo.OutputPubKey.ScriptPubKey;
     }
 
     public ArkContractEntity ToEntity(
@@ -60,7 +60,7 @@ public abstract class ArkContract(OutputDescriptor server)
         ContractActivityState activityState = ContractActivityState.Active)
     {
         return new ArkContractEntity(
-            GetScriptPubKeyHex(),
+            GetScriptPubKey().ToHex(),
             activityState,
             Type,
             GetContractData(),
