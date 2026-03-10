@@ -35,6 +35,6 @@ public class DelegateContractDelegationTransformer(
     public (ScriptBuilder intentScript, ScriptBuilder forfeitScript) GetDelegationScriptBuilders(ArkContract contract)
     {
         var delegateContract = (ArkDelegateContract)contract;
-        return (delegateContract.ForfeitPath(), delegateContract.DelegatePath());
+        return (delegateContract.CollaborativePath(), delegateContract.DelegatePath());
     }
 }

@@ -37,6 +37,6 @@ public class DelegateContractTransformer(IWalletProvider walletProvider, ILogger
         var delegateContract = (contract as ArkDelegateContract)!;
         return new ArkCoin(walletIdentifier, contract, vtxo.CreatedAt, vtxo.ExpiresAt, vtxo.ExpiresAtHeight, vtxo.OutPoint, vtxo.TxOut,
             delegateContract.User ?? throw new InvalidOperationException("User is required for delegate contract"),
-            delegateContract.ForfeitPath(), null, null, null, vtxo.Swept, vtxo.Unrolled, assets: vtxo.Assets);
+            delegateContract.CollaborativePath(), null, null, null, vtxo.Swept, vtxo.Unrolled, assets: vtxo.Assets);
     }
 }

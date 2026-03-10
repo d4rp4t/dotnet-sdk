@@ -138,8 +138,8 @@ public class DelegateContractTransformerTests
         Assert.That(coin.WalletIdentifier, Is.EqualTo("wallet-1"));
         Assert.That(coin.Contract, Is.SameAs(contract));
 
-        // Spending script should be ForfeitPath (User+Server 2-of-2) — same concept as CollaborativePath
-        var expectedScript = contract.ForfeitPath().Build();
+        // Spending script should be CollaborativePath (User+Server 2-of-2) — same concept as CollaborativePath
+        var expectedScript = contract.CollaborativePath().Build();
         Assert.That(coin.SpendingScriptBuilder.Build().Script, Is.EqualTo(expectedScript.Script));
     }
 
@@ -151,9 +151,9 @@ public class DelegateContractTransformerTests
 
         var (intentScript, forfeitScript) = delegationTransformer.GetDelegationScriptBuilders(contract);
 
-        // intentScript = ForfeitPath (User+Server 2-of-2)
+        // intentScript = CollaborativePath (User+Server 2-of-2)
         Assert.That(intentScript.Build().Script.ToHex(),
-            Is.EqualTo(contract.ForfeitPath().Build().Script.ToHex()));
+            Is.EqualTo(contract.CollaborativePath().Build().Script.ToHex()));
         // forfeitScript = DelegatePath (User+Delegate+Server 3-of-3)
         Assert.That(forfeitScript.Build().Script.ToHex(),
             Is.EqualTo(contract.DelegatePath().Build().Script.ToHex()));

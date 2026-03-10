@@ -78,7 +78,7 @@ public class DelegateContractTests
     }
 
     [Test]
-    public void DelegateContract_ForfeitPath_HasChecksigVerify()
+    public void DelegateContract_CollaborativePath_HasChecksigVerify()
     {
         var contract = CreateContract();
         var forfeitScript = contract.GetTapScriptList()[1].Script;

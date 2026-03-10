@@ -39,15 +39,15 @@ public class ArkDelegateContract : ArkContract
     {
         return [
             DelegatePath(),
-            ForfeitPath(),
+            CollaborativePath(),
             ExitPath()
         ];
     }
 
     /// <summary>
-    /// Collaborative forfeit path: user + server (2-of-2).
+    /// Collaborative path: user + server (2-of-2).
     /// </summary>
-    public ScriptBuilder ForfeitPath()
+    public ScriptBuilder CollaborativePath()
     {
         var ownerScript = new NofNMultisigTapScript([User.ToXOnlyPubKey()]);
         return new CollaborativePathArkTapScript(Server!.ToXOnlyPubKey(), ownerScript);

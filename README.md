@@ -273,7 +273,7 @@ services.AddArkDelegation("http://localhost:7012");
 ```
 
 The delegate contract has three spending paths:
-- **ForfeitPath** (User + Server, 2-of-2) — collaborative spending, same as a regular payment contract
+- **CollaborativePath** (User + Server, 2-of-2) — collaborative spending, same as a regular payment contract
 - **DelegatePath** (User + Delegate + Server, 3-of-3) — used by the delegator for ACP forfeit txs
 - **ExitPath** (User only, after CSV delay) — unilateral recovery
 
