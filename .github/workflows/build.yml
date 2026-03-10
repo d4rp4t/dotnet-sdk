@@ -63,6 +63,7 @@ jobs:
           docker logs bitcoin > /tmp/bitcoin-logs.txt 2>&1 || true
           docker logs lnd > /tmp/lnd-logs.txt 2>&1 || true
           docker logs boltz-lnd > /tmp/boltz-lnd-logs.txt 2>&1 || true
+          docker logs fulmine-delegator > /tmp/fulmine-delegator-logs.txt 2>&1 || true
       - name: Upload logs
         if: failure()
         uses: actions/upload-artifact@v4

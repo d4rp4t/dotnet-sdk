@@ -1,14 +1,17 @@
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using NArk.Abstractions.Fees;
+using NArk.Abstractions.Wallets;
 using NArk.Core.CoinSelector;
 using NArk.Core.Events;
 using NArk.Core.Fees;
 using NArk.Core.Models.Options;
 using NArk.Core.Services;
 using NArk.Core.Sweeper;
+using NArk.Abstractions.Services;
 using NArk.Core.Transformers;
 using NArk.Core.Transport;
+using NArk.Core.Wallet;
 using NArk.Transport.GrpcClient;
 using Microsoft.Extensions.Logging;
 
@@ -86,6 +89,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ICoinSelector, DefaultCoinSelector>();
         services.AddHostedService<ArkHostedLifecycle>();
 
+        // Delegation
+        services.AddTransient<IDelegationTransformer, DelegateContractDelegationTransformer>();
+        services.AddSingleton<DelegationService>();
+
         // VTXO polling - automatically poll for updates after batch success and spend transactions
         services.AddVtxoPolling();
 
@@ -133,6 +140,48 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddArkRegtest(this IServiceCollection services)
         => services.AddArkNetwork(ArkNetworkConfig.Regtest);
+
+    /// <summary>
+    /// Registers automated VTXO delegation services.
+    /// Call this in addition to <see cref="AddArkCoreServices"/> and AFTER registering
+    /// <see cref="IWalletProvider"/>. This will:
+    /// - Register the gRPC delegator provider
+    /// - Register DelegateContractTransformer (makes delegate VTXOs spendable)
+    /// - Decorate IWalletProvider to produce ArkDelegateContract for HD wallets
+    /// - Register DelegationMonitorService to auto-delegate new VTXOs
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="delegatorUri">The URI of the Fulmine delegator gRPC endpoint.</param>
+    public static IServiceCollection AddArkDelegation(this IServiceCollection services, string delegatorUri)
+    {
+        services.AddSingleton<IDelegatorProvider>(_ => new GrpcDelegatorProvider(delegatorUri));
+        services.AddTransient<IContractTransformer, DelegateContractTransformer>();
+
+        // Decorate IWalletProvider: wrap the existing registration with DelegatingWalletProvider
+        // that overrides contract derivation to produce ArkDelegateContract for HD wallets.
+        // Uses the same pattern as CachingClientTransport wrapping GrpcClientTransport.
+        var existingDescriptor = services.LastOrDefault(d => d.ServiceType == typeof(IWalletProvider));
+        if (existingDescriptor is not null)
+        {
+            services.Remove(existingDescriptor);
+            services.AddSingleton<IWalletProvider>(sp =>
+            {
+                // Resolve the inner provider from the original descriptor
+                var inner = (IWalletProvider)(existingDescriptor.ImplementationFactory?.Invoke(sp)
+                    ?? (existingDescriptor.ImplementationInstance
+                        ?? ActivatorUtilities.CreateInstance(sp, existingDescriptor.ImplementationType!)));
+
+                var delegator = sp.GetRequiredService<IDelegatorProvider>();
+                var transport = sp.GetRequiredService<IClientTransport>();
+                return new DelegatingWalletProvider(inner, delegator, transport);
+            });
+        }
+
+        services.AddSingleton<DelegationMonitorService>();
+        services.AddHostedService(sp => sp.GetRequiredService<DelegationMonitorService>());
+
+        return services;
+    }
 
     /// <summary>
     /// Registers VTXO polling event handlers that automatically poll for VTXO updates

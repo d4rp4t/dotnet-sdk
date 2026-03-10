@@ -250,6 +250,75 @@ var details = await transport.GetAssetDetailsAsync(assetId);
 // details.Metadata — key-value metadata (if set during issuance)
 ```
 
+## Delegation
+
+Delegation solves the VTXO liveness problem — VTXOs expire if not refreshed. A delegate service (e.g., [Fulmine](https://github.com/ArkLabsHQ/fulmine)) participates in batch rounds on your behalf, rolling VTXOs over before expiry.
+
+### Automated Delegation
+
+When `AddArkDelegation` is configured, the SDK automatically:
+1. **Derives delegate contracts** — HD wallets produce `ArkDelegateContract` instead of `ArkPaymentContract` for Receive/SendToSelf operations
+2. **Auto-delegates VTXOs** — when VTXOs arrive at delegate contract addresses, the SDK builds partially signed intent + ACP forfeit txs and sends them to the delegator
+
+```csharp
+services.AddArkCoreServices();
+
+// Enable automated delegation (Fulmine delegator gRPC endpoint)
+services.AddArkDelegation("http://localhost:7012");
+
+// That's it. HD wallets will now:
+// - Derive ArkDelegateContract for new receive/change addresses
+// - Auto-delegate incoming VTXOs to the delegator on receipt
+// nsec wallets (hashlock/note contracts) are unaffected.
+```
+
+The delegate contract has three spending paths:
+- **CollaborativePath** (User + Server, 2-of-2) — collaborative spending, same as a regular payment contract
+- **DelegatePath** (User + Delegate + Server, 3-of-3) — used by the delegator for ACP forfeit txs
+- **ExitPath** (User only, after CSV delay) — unilateral recovery
+
+### Manual Delegation
+
+For fine-grained control, you can manually construct delegate contracts and delegate VTXOs:
+
+```csharp
+// Get delegator info
+var info = await delegationService.GetDelegatorInfoAsync();
+
+// Create a delegate contract
+var delegateContract = new ArkDelegateContract(
+    serverInfo.SignerKey,
+    serverInfo.UnilateralExit,
+    userKey,
+    KeyExtensions.ParseOutputDescriptor(info.Pubkey, network),
+    cltvLocktime: new LockTime(currentHeight + 100)); // optional safety window
+
+// Send VTXOs to the delegate contract address
+await spendingService.Spend(walletId,
+    outputs: [new ArkTxOut(delegateContract.GetArkAddress(), amount)]);
+
+// Delegate to the delegator
+await delegationService.DelegateAsync(
+    intentMessage: intentJson,
+    intentProof: proofPsbtBase64,
+    forfeitTxs: forfeitTxHexArray,
+    rejectReplace: false);
+```
+
+The CLTV locktime is optional — when set, it prevents the delegate from acting before a specific block height, giving the owner a safety window.
+
+### Custom Contract Delegation
+
+The SDK uses an `IDelegationTransformer` pattern to support delegating different contract types. The built-in `DelegateContractDelegationTransformer` handles `ArkDelegateContract` VTXOs. Register additional transformers for other contract types:
+
+```csharp
+services.AddTransient<IDelegationTransformer, MyCustomDelegationTransformer>();
+```
+
+Each transformer implements:
+- `CanDelegate(walletId, contract, delegatePubkey)` — check eligibility
+- `GetDelegationScriptBuilders(contract)` — return (intentScript, forfeitScript) for building delegation artifacts
+
 ## Collaborative Exits (On-chain)
 
 Move funds from Ark back to the Bitcoin base layer:
@@ -445,6 +514,8 @@ The SDK uses a pluggable architecture. Register your implementations for:
 | `ICoinSelector` | UTXO selection strategy | `DefaultCoinSelector` |
 | `ISweepPolicy` | VTXO consolidation rules | Register zero or more |
 | `IContractTransformer` | Custom contract &rarr; coin transforms | Register zero or more |
+| `IDelegationTransformer` | Check contract eligibility and provide delegation script builders | `DelegateContractDelegationTransformer` |
+| `IContractTransformer` (delegate) | Make delegate VTXOs spendable | `DelegateContractTransformer` |
 | `IEventHandler<T>` | React to batch/sweep/spend events | Register zero or more |
 
 ## Local Development
