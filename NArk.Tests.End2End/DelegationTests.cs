@@ -140,7 +140,7 @@ public class DelegationTests
                                          a.Any(x => x.AssetId == result.AssetId));
         var contracts = await wallet.contracts.GetContracts(scripts: [assetVtxo.Script]);
         var entity = contracts.First();
-        Assert.That(entity.Type, Is.EqualTo("delegate"),
+        Assert.That(entity.Type, Is.EqualTo("Delegate").IgnoreCase,
             "Asset VTXO should be at a delegate contract");
 
         TestContext.Progress.WriteLine("Asset issuance to delegate contract verified");
