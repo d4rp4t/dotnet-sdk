@@ -252,35 +252,68 @@ var details = await transport.GetAssetDetailsAsync(assetId);
 
 ## Delegation
 
-Delegation solves the VTXO liveness problem — VTXOs expire if not refreshed. A delegate service (e.g., [Fulmine](https://github.com/ArkLabsHQ/fulmine)) pre-signs renewal artifacts on the user's behalf, keeping VTXOs alive without user interaction.
+Delegation solves the VTXO liveness problem — VTXOs expire if not refreshed. A delegate service (e.g., [Fulmine](https://github.com/ArkLabsHQ/fulmine)) monitors your VTXOs and automatically participates in batch rounds on your behalf, rolling them over before expiry.
 
 ### Setup
 
-Register delegation services alongside core services:
-
 ```csharp
-// IServiceCollection — delegation transformer is registered by AddArkCoreServices()
+// Core services include the delegation transformer
 services.AddArkCoreServices();
 
-// Connect to a delegator service (e.g., Fulmine)
+// Connect to a delegator service (Fulmine gRPC endpoint)
 services.AddArkDelegation("http://localhost:7011");
 ```
 
-### Delegate VTXOs
+### 1. Get the Delegator's Public Key
 
 ```csharp
-// Get VTXOs to delegate
-var coins = await spendingService.GetAvailableCoins(walletId);
-var vtxos = coins.Select(c => c.Vtxo).ToList();
+// The delegator's pubkey is needed when constructing delegate contracts
+var delegatePubkey = await delegationService.GetDelegatePublicKeyAsync();
+```
 
-// Delegate to the configured delegator
-var result = await delegationService.DelegateAsync(
+### 2. Send Funds to a Delegate Contract
+
+Construct an `ArkDelegateContract` with the delegator's pubkey, then spend funds to it:
+
+```csharp
+var serverInfo = await transport.GetServerInfoAsync();
+var delegateContract = new ArkDelegateContract(
+    serverInfo.ServerPubKey,
+    serverInfo.UnilateralExitDelay,
+    userKey,
+    KeyExtensions.ParseOutputDescriptor(delegatePubkey, network),
+    cltvLocktime: new LockTime(currentHeight + 100)); // optional safety window
+
+// Spend existing VTXOs to the delegate contract address
+await spendingService.Spend(walletId,
+    outputs: [new ArkTxOut(delegateContract.GetArkAddress(), amount)]);
+```
+
+The CLTV locktime is optional — when set, it prevents the delegate from acting before a specific block height, giving the owner a safety window to spend via the forfeit path first. When omitted, the delegate can act immediately.
+
+### 3. Watch for Automatic Rollover
+
+Register the address with the delegator. It will automatically roll over VTXOs before they expire:
+
+```csharp
+var vtxos = await vtxoStorage.GetVtxos(walletId);
+var result = await delegationService.WatchForRolloverAsync(
     walletId,
     vtxos,
-    destination: myArkAddress);
+    destinationAddress: myArkAddress.ToString(false));
 
-// result.DelegatedOutpoints — successfully delegated
-// result.FailedOutpoints    — could not be delegated (e.g., unsupported contract type)
+// result.WatchedAddresses — successfully registered
+// result.FailedOutpoints  — could not be registered (unsupported contract, etc.)
+```
+
+### 4. Manage Watched Addresses
+
+```csharp
+// List all watched addresses
+var watched = await delegationService.ListWatchedAsync();
+
+// Stop watching an address
+await delegationService.UnwatchAsync(arkAddress);
 ```
 
 ### Custom Contract Delegation
@@ -291,7 +324,7 @@ The SDK uses an `IDelegationTransformer` pattern to support delegating different
 services.AddTransient<IDelegationTransformer, MyCustomDelegationTransformer>();
 ```
 
-Each transformer implements `CanDelegate` (check if it handles the contract type) and `Transform` (return an `ArkCoin` with the correct spending path for delegation).
+Each transformer implements `CanDelegate` to check if the contract is delegatable to the given delegator pubkey.
 
 ## Collaborative Exits (On-chain)
 

@@ -6,42 +6,72 @@ option csharp_namespace = "Fulmine.V1";
 
 import "google/api/annotations.proto";
 
-// DelegatorService defines the public RPCs that clients can consume to delegate the refresh of
-// their VTXO set
+// DelegatorService defines the public RPCs that clients use to delegate
+// automatic VTXO rollover to a Fulmine delegator instance.
 service DelegatorService {
-  // GetDelegatorInfo returns info about the delegator contract
-  rpc GetDelegatorInfo(GetDelegatorInfoRequest) returns (GetDelegatorInfoResponse) {
+  // GetDelegatePublicKey returns the delegator's compressed public key.
+  rpc GetDelegatePublicKey(GetDelegatePublicKeyRequest) returns (GetDelegatePublicKeyResponse) {
     option (google.api.http) = {
-      get: "/v1/delegator/info"
+      get: "/v1/delegate/pubkey"
     };
   };
 
-  // Delegate is consumed by clients to request the delegation of the refresh of their VTXOs
-  rpc Delegate(DelegateRequest) returns (DelegateResponse) {
+  // WatchAddressForRollover registers an Ark address for automatic rollover
+  // before its VTXOs expire. The delegator will participate in batch rounds
+  // on behalf of the owner.
+  rpc WatchAddressForRollover(WatchAddressForRolloverRequest) returns (WatchAddressForRolloverResponse) {
     option (google.api.http) = {
-      post: "/v1/delegate"
+      post: "/v1/delegate/watch"
       body: "*"
     };
   };
+
+  // UnwatchAddress stops watching an Ark address for rollover.
+  rpc UnwatchAddress(UnwatchAddressRequest) returns (UnwatchAddressResponse) {
+    option (google.api.http) = {
+      post: "/v1/delegate/unwatch"
+      body: "*"
+    };
+  };
+
+  // ListWatchedAddresses returns all addresses currently being watched.
+  rpc ListWatchedAddresses(ListWatchedAddressesRequest) returns (ListWatchedAddressesResponse) {
+    option (google.api.http) = {
+      get: "/v1/delegate/watched"
+    };
+  };
 }
 
-message GetDelegatorInfoRequest {}
+message GetDelegatePublicKeyRequest {}
 
-message GetDelegatorInfoResponse {
-  string pubkey = 1;
-  string fee = 2;
-  string delegator_address = 3;
+message GetDelegatePublicKeyResponse {
+  string public_key = 1;
 }
 
-message DelegateRequest {
-  DelegateIntent intent = 1;
-  repeated string forfeit_txs = 2;
-  bool reject_replace = 3;
+message Tapscripts {
+  repeated string scripts = 1;
 }
 
-message DelegateResponse {}
+message RolloverAddress {
+  string address = 1;
+  Tapscripts taproot_tree = 2;
+  string destination_address = 3;
+}
 
-message DelegateIntent {
-  string message = 1;
-  string proof = 2;
+message WatchAddressForRolloverRequest {
+  RolloverAddress rollover_address = 1;
+}
+
+message WatchAddressForRolloverResponse {}
+
+message UnwatchAddressRequest {
+  string address = 1;
+}
+
+message UnwatchAddressResponse {}
+
+message ListWatchedAddressesRequest {}
+
+message ListWatchedAddressesResponse {
+  repeated RolloverAddress addresses = 1;
 }

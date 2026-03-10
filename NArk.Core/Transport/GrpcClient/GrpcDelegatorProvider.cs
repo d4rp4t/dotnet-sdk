@@ -14,34 +14,51 @@ public class GrpcDelegatorProvider : IDelegatorProvider
         _client = new DelegatorService.DelegatorServiceClient(channel);
     }
 
-    public async Task<DelegateInfo> GetDelegateInfoAsync(CancellationToken cancellationToken = default)
+    public async Task<string> GetDelegatePublicKeyAsync(CancellationToken cancellationToken = default)
     {
-        var response = await _client.GetDelegatorInfoAsync(
-            new GetDelegatorInfoRequest(),
+        var response = await _client.GetDelegatePublicKeyAsync(
+            new GetDelegatePublicKeyRequest(),
             cancellationToken: cancellationToken);
-
-        var fee = ulong.TryParse(response.Fee, out var f) ? f : 0;
-        return new DelegateInfo(response.Pubkey, fee, response.DelegatorAddress);
+        return response.PublicKey;
     }
 
-    public async Task DelegateAsync(
-        string intentMessage,
-        string intentProof,
-        string[] forfeitTxs,
-        bool rejectReplace = false,
+    public async Task WatchAddressForRolloverAsync(
+        string address,
+        string[] tapscripts,
+        string destinationAddress,
         CancellationToken cancellationToken = default)
     {
-        var request = new DelegateRequest
+        var request = new WatchAddressForRolloverRequest
         {
-            Intent = new DelegateIntent
+            RolloverAddress = new RolloverAddress
             {
-                Message = intentMessage,
-                Proof = intentProof
-            },
-            RejectReplace = rejectReplace
+                Address = address,
+                TaprootTree = new Tapscripts(),
+                DestinationAddress = destinationAddress
+            }
         };
-        request.ForfeitTxs.AddRange(forfeitTxs);
+        request.RolloverAddress.TaprootTree.Scripts.AddRange(tapscripts);
 
-        await _client.DelegateAsync(request, cancellationToken: cancellationToken);
+        await _client.WatchAddressForRolloverAsync(request, cancellationToken: cancellationToken);
+    }
+
+    public async Task UnwatchAddressAsync(string address, CancellationToken cancellationToken = default)
+    {
+        await _client.UnwatchAddressAsync(
+            new UnwatchAddressRequest { Address = address },
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<WatchedRolloverAddress>> ListWatchedAddressesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _client.ListWatchedAddressesAsync(
+            new ListWatchedAddressesRequest(),
+            cancellationToken: cancellationToken);
+
+        return response.Addresses.Select(a => new WatchedRolloverAddress(
+            a.Address,
+            a.TaprootTree.Scripts.ToArray(),
+            a.DestinationAddress)).ToList();
     }
 }

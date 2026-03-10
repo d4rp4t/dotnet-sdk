@@ -34,34 +34,55 @@ public class DelegateContractTests
 
     private ArkDelegateContract CreateContract(
         OutputDescriptor? delegateKey = null,
-        LockTime? cltvLocktime = null)
+        LockTime? cltvLocktime = null,
+        bool useCltv = true)
     {
         return new ArkDelegateContract(
             TestServerKey,
             DefaultExitDelay,
             TestUserKey,
             delegateKey ?? TestDelegateKey,
-            cltvLocktime ?? DefaultCltvLocktime);
+            useCltv ? (cltvLocktime ?? DefaultCltvLocktime) : null);
     }
 
     [Test]
     public void DelegateContract_GeneratesThreeTapLeaves()
     {
         var contract = CreateContract();
-
         var leaves = contract.GetTapScriptList();
-
         Assert.That(leaves, Has.Length.EqualTo(3));
+    }
+
+    // Leaf ordering: [0] delegate, [1] forfeit, [2] exit
+
+    [Test]
+    public void DelegateContract_DelegatePath_WithCLTV_HasCltvGate()
+    {
+        var contract = CreateContract();
+        var delegateScript = contract.GetTapScriptList()[0].Script;
+
+        Assert.That(delegateScript.ToString(), Does.Contain("OP_CLTV"));
+        Assert.That(delegateScript.ToString(), Does.Contain("OP_CHECKSIGVERIFY"));
+    }
+
+    [Test]
+    public void DelegateContract_DelegatePath_WithoutCLTV_NoCltvGate()
+    {
+        var contract = CreateContract(useCltv: false);
+        var delegateScript = contract.GetTapScriptList()[0].Script;
+
+        Assert.That(delegateScript.ToString(), Does.Not.Contain("OP_CLTV"));
+        // Still has multisig: user + delegate CHECKSIGVERIFY, server CHECKSIG
+        Assert.That(delegateScript.ToString(), Does.Contain("OP_CHECKSIGVERIFY"));
+        Assert.That(delegateScript.ToString(), Does.Contain("OP_CHECKSIG"));
     }
 
     [Test]
     public void DelegateContract_ForfeitPath_HasChecksigVerify()
     {
         var contract = CreateContract();
-        var leaves = contract.GetTapScriptList();
+        var forfeitScript = contract.GetTapScriptList()[1].Script;
 
-        // Forfeit path: server CHECKSIGVERIFY + user CHECKSIG
-        var forfeitScript = leaves[0].Script;
         Assert.That(forfeitScript.ToString(), Does.Contain("OP_CHECKSIGVERIFY"));
         Assert.That(forfeitScript.ToString(), Does.Contain("OP_CHECKSIG"));
     }
@@ -70,23 +91,9 @@ public class DelegateContractTests
     public void DelegateContract_ExitPath_HasCSV()
     {
         var contract = CreateContract();
-        var leaves = contract.GetTapScriptList();
+        var exitScript = contract.GetTapScriptList()[2].Script;
 
-        // Exit path: CSV timelock + user
-        var exitScript = leaves[1].Script;
         Assert.That(exitScript.ToString(), Does.Contain("OP_CSV"));
-    }
-
-    [Test]
-    public void DelegateContract_DelegatePath_HasCLTV()
-    {
-        var contract = CreateContract();
-        var leaves = contract.GetTapScriptList();
-
-        // Delegate path: CLTV + user + delegate + server
-        var delegateScript = leaves[2].Script;
-        Assert.That(delegateScript.ToString(), Does.Contain("OP_CLTV"));
-        Assert.That(delegateScript.ToString(), Does.Contain("OP_CHECKSIGVERIFY"));
     }
 
     [Test]
@@ -117,7 +124,16 @@ public class DelegateContractTests
     }
 
     [Test]
-    public void DelegateContract_ParseRoundTrip()
+    public void DelegateContract_WithAndWithoutCltv_DifferentAddresses()
+    {
+        var withCltv = CreateContract(useCltv: true);
+        var withoutCltv = CreateContract(useCltv: false);
+
+        Assert.That(withCltv.GetScriptPubKey().ToHex(), Is.Not.EqualTo(withoutCltv.GetScriptPubKey().ToHex()));
+    }
+
+    [Test]
+    public void DelegateContract_ParseRoundTrip_WithCltv()
     {
         var original = CreateContract();
         var entity = original.ToEntity("test-wallet");
@@ -126,6 +142,18 @@ public class DelegateContractTests
 
         Assert.That(parsed.GetScriptPubKey().ToHex(), Is.EqualTo(original.GetScriptPubKey().ToHex()));
         Assert.That(parsed.CltvLocktime, Is.EqualTo(original.CltvLocktime));
+    }
+
+    [Test]
+    public void DelegateContract_ParseRoundTrip_WithoutCltv()
+    {
+        var original = CreateContract(useCltv: false);
+        var entity = original.ToEntity("test-wallet");
+
+        var parsed = (ArkDelegateContract)ArkDelegateContract.Parse(entity.AdditionalData, Network.RegTest);
+
+        Assert.That(parsed.GetScriptPubKey().ToHex(), Is.EqualTo(original.GetScriptPubKey().ToHex()));
+        Assert.That(parsed.CltvLocktime, Is.Null);
     }
 
     [Test]
@@ -144,7 +172,6 @@ public class DelegateContractTests
     public void DelegateContract_GetArkAddress_ReturnsValidAddress()
     {
         var contract = CreateContract();
-
         var arkAddress = contract.GetArkAddress();
 
         Assert.That(arkAddress, Is.Not.Null);
