@@ -64,3 +64,6 @@ CLAUDE.md
 NArk.Tests.End2End/Infrastructure/nigiri
 docs/plans
 nul
+
+# Superpowers docs (auto-generated)
+docs/superpowers/
