@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Extensions;
+using NArk.Abstractions.Scripts;
 using NArk.Abstractions.Wallets;
 using NArk.Core.Contracts;
 using NBitcoin.Secp256k1;
@@ -11,18 +12,17 @@ public class DelegateContractDelegationTransformer(
     IWalletProvider walletProvider,
     ILogger<DelegateContractDelegationTransformer>? logger = null) : IDelegationTransformer
 {
-    public async Task<bool> CanDelegate(string walletIdentifier, ArkContract contract, string delegatePubkeyHex)
+    public async Task<bool> CanDelegate(string walletIdentifier, ArkContract contract, ECPubKey delegatePubkey)
     {
         if (contract is not ArkDelegateContract delegateContract)
             return false;
 
         // Verify the delegator's pubkey matches the contract's delegate key
-        var delegatorPubkey = ECXOnlyPubKey.Create(Convert.FromHexString(delegatePubkeyHex));
-        if (!delegateContract.Delegate.ToXOnlyPubKey().Equals(delegatorPubkey))
+        if (!delegateContract.Delegate.ToXOnlyPubKey().Equals(delegatePubkey.ToXOnlyPubKey()))
         {
             logger?.LogDebug(
                 "Delegator pubkey mismatch: contract={ContractDelegate}, delegator={DelegatorPubkey}",
-                delegateContract.Delegate, delegatePubkeyHex);
+                delegateContract.Delegate, Convert.ToHexString(delegatePubkey.ToBytes()).ToLowerInvariant());
             return false;
         }
 
@@ -30,5 +30,11 @@ public class DelegateContractDelegationTransformer(
             return false;
 
         return await addressProvider.IsOurs(delegateContract.User);
+    }
+
+    public (ScriptBuilder intentScript, ScriptBuilder forfeitScript) GetDelegationScriptBuilders(ArkContract contract)
+    {
+        var delegateContract = (ArkDelegateContract)contract;
+        return (delegateContract.ForfeitPath(), delegateContract.DelegatePath());
     }
 }
