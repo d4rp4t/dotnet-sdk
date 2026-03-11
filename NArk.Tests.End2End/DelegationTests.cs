@@ -172,7 +172,7 @@ public class DelegationTests
 
         // Set up batch round services
         var chainTimeProvider = new ChainTimeProvider(Network.RegTest, SharedArkInfrastructure.NbxplorerEndpoint);
-        var intentStorage = new InMemoryIntentStorage();
+        var intentStorage = TestStorage.CreateIntentStorage();
 
         var scheduler = new SimpleIntentScheduler(
             new DefaultFeeEstimator(wallet.clientTransport, chainTimeProvider),
