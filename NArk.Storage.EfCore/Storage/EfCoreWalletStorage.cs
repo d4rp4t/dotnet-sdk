@@ -56,7 +56,7 @@ public class EfCoreWalletStorage : IWalletStorage
         if (existing != null)
         {
             existing.Wallet = wallet.Secret;
-            existing.LastUsedIndex = wallet.LastUsedIndex;
+            existing.LastUsedIndex = Math.Max(existing.LastUsedIndex, wallet.LastUsedIndex);
             if (!string.IsNullOrEmpty(wallet.AccountDescriptor))
                 existing.AccountDescriptor ??= wallet.AccountDescriptor;
         }
@@ -120,7 +120,7 @@ public class EfCoreWalletStorage : IWalletStorage
             existing.WalletDestination = wallet.Destination;
             existing.WalletType = wallet.WalletType;
             existing.AccountDescriptor = wallet.AccountDescriptor;
-            existing.LastUsedIndex = wallet.LastUsedIndex;
+            existing.LastUsedIndex = Math.Max(existing.LastUsedIndex, wallet.LastUsedIndex);
             inserted = false;
         }
         else
