@@ -357,18 +357,19 @@ IBoardingUtxoProvider utxoProvider = new EsploraBoardingUtxoProvider(
 IBoardingUtxoProvider utxoProvider = new NBXplorerBoardingUtxoProvider(
     network, new Uri("http://localhost:32838"));
 
-// Create the sync service and poll periodically
-var syncService = new BoardingUtxoSyncService(
-    contractStorage, vtxoStorage, clientTransport, utxoProvider);
+// Register the sync service and provider
+services.AddSingleton<IBoardingUtxoProvider>(utxoProvider);
+services.AddSingleton<BoardingUtxoSyncService>();
 
-while (!ct.IsCancellationRequested)
-{
-    await syncService.SyncAsync(ct);
-    await Task.Delay(TimeSpan.FromSeconds(30), ct);
-}
+// Register the poll service — automatically polls every 30s
+// when unspent boarding VTXOs exist
+services.AddSingleton<BoardingUtxoPollService>();
+services.AddHostedService(sp => sp.GetRequiredService<BoardingUtxoPollService>());
 ```
 
-Once a boarding UTXO is synced, the SDK's `IntentGenerationService` automatically creates an intent for it. The next batch round moves it into the VTXO tree.
+The `BoardingUtxoPollService` automatically checks for unspent boarding VTXOs every 30 seconds and syncs confirmation state changes. It complements event-driven sync (e.g., NBXplorer transaction events) to catch missed events during provider reconnects or block confirmations.
+
+Once a boarding UTXO is synced and confirmed, the SDK's `IntentGenerationService` automatically creates an intent for it. The next batch round moves it into the VTXO tree.
 
 ### 3. Handle Expired Boarding UTXOs (Optional)
 
@@ -520,22 +521,22 @@ The SDK uses a pluggable architecture. Register your implementations for:
 
 ## Local Development
 
-The SDK uses [.NET Aspire](https://learn.microsoft.com/en-us/dotnet/aspire/) for local orchestration with Docker containers (arkd, Bitcoin Core, Boltz, etc.):
-
-```bash
-cd NArk.AppHost
-dotnet run
-```
-
 ### Running Tests
 
 ```bash
 # Unit tests
 dotnet test NArk.Tests
 
-# End-to-end tests (requires Docker)
+# End-to-end tests (requires Docker + nigiri)
+# Start the regtest infrastructure first:
+chmod +x ./NArk.Tests.End2End/Infrastructure/start-env.sh
+./NArk.Tests.End2End/Infrastructure/start-env.sh --clean
+
+# Then run the tests:
 dotnet test NArk.Tests.End2End
 ```
+
+The E2E tests use [nigiri](https://github.com/vulpemventures/nigiri) for a local Bitcoin regtest environment with a Docker Compose overlay for arkd, Boltz, and Fulmine services.
 
 ## License
 

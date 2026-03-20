@@ -139,6 +139,9 @@ public class TreeSignerSession
         foreach (var g in _graph)
         {
             var txid = g.Root.GetGlobalTransaction().GetHash();
+            // Skip tree nodes where we're not a cosigner
+            if (!_musigContexts!.ContainsKey(txid))
+                continue;
             var sig = await SignPartialAsync(g, cancellationToken);
             sigs[txid] = sig;
         }
@@ -246,8 +249,9 @@ public class TreeSignerSession
         if (_musigContexts == null)
             throw new InvalidOperationException("musig contexts not created");
 
+        // Skip txids where we're not a cosigner — we didn't create a context for them
         if (!_musigContexts.TryGetValue(txid, out var musigContext))
-            throw new InvalidOperationException("missing musig context");
+            return Task.CompletedTask;
 
         if (_myNonces is null || !_myNonces.TryGetValue(txid, out var myNonce))
             throw new InvalidOperationException("missing private nonce");

@@ -33,40 +33,25 @@ public class NBXplorerBoardingUtxoProvider : IBoardingUtxoProvider
 
         var utxoChanges = await _explorerClient.GetUTXOsAsync(trackedSource, cancellationToken);
 
-        var results = new List<BoardingUtxo>();
+        // GetUnspentUTXOs applies the spent filter across confirmed + unconfirmed deltas.
+        // Raw Confirmed.UTXOs / Unconfirmed.UTXOs are deltas that may include already-spent outputs.
+        var unspent = utxoChanges.GetUnspentUTXOs().ToList();
 
-        // Confirmed UTXOs
-        if (utxoChanges.Confirmed?.UTXOs is { } confirmedUtxos)
+        var results = new List<BoardingUtxo>(unspent.Count);
+        foreach (var utxo in unspent)
         {
-            foreach (var utxo in confirmedUtxos)
-            {
-                var blockHeight = utxo.Confirmations > 0
-                    ? utxoChanges.CurrentHeight - (int)utxo.Confirmations + 1
-                    : 0;
+            var confirmed = utxo.Confirmations > 0;
+            var blockHeight = confirmed
+                ? utxoChanges.CurrentHeight - (int)utxo.Confirmations + 1
+                : 0;
 
-                results.Add(new BoardingUtxo(
-                    Txid: utxo.Outpoint.Hash.ToString(),
-                    Vout: (uint)utxo.Outpoint.N,
-                    Amount: ((Money)utxo.Value).Satoshi > 0 ? (ulong)((Money)utxo.Value).Satoshi : 0,
-                    Confirmed: true,
-                    BlockHeight: blockHeight,
-                    BlockTime: utxo.Timestamp.ToUnixTimeSeconds()));
-            }
-        }
-
-        // Unconfirmed UTXOs (included but marked as unconfirmed — sync service filters them)
-        if (utxoChanges.Unconfirmed?.UTXOs is { } unconfirmedUtxos)
-        {
-            foreach (var utxo in unconfirmedUtxos)
-            {
-                results.Add(new BoardingUtxo(
-                    Txid: utxo.Outpoint.Hash.ToString(),
-                    Vout: (uint)utxo.Outpoint.N,
-                    Amount: ((Money)utxo.Value).Satoshi > 0 ? (ulong)((Money)utxo.Value).Satoshi : 0,
-                    Confirmed: false,
-                    BlockHeight: 0,
-                    BlockTime: 0));
-            }
+            results.Add(new BoardingUtxo(
+                Txid: utxo.Outpoint.Hash.ToString(),
+                Vout: (uint)utxo.Outpoint.N,
+                Amount: ((Money)utxo.Value).Satoshi > 0 ? (ulong)((Money)utxo.Value).Satoshi : 0,
+                Confirmed: confirmed,
+                BlockHeight: blockHeight,
+                BlockTime: confirmed ? utxo.Timestamp.ToUnixTimeSeconds() : 0));
         }
 
         return results;

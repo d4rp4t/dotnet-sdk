@@ -34,12 +34,11 @@ public class BoardingUtxoSyncService
         _logger = logger;
     }
 
+    /// <summary>
+    /// Sync all boarding contracts from storage.
+    /// </summary>
     public async Task SyncAsync(CancellationToken cancellationToken = default)
     {
-        var serverInfo = await _clientTransport.GetServerInfoAsync(cancellationToken);
-        var network = serverInfo.Network;
-        var boardingExitDelay = serverInfo.BoardingExit;
-
         var boardingContracts = await _contractStorage.GetContracts(
             contractTypes: [ArkBoardingContract.ContractType],
             cancellationToken: cancellationToken);
@@ -50,9 +49,24 @@ public class BoardingUtxoSyncService
             return;
         }
 
-        _logger?.LogInformation("Syncing {Count} boarding contracts", boardingContracts.Count);
+        await SyncAsync(boardingContracts, cancellationToken);
+    }
 
-        foreach (var contractEntity in boardingContracts)
+    /// <summary>
+    /// Sync specific boarding contracts.
+    /// </summary>
+    public async Task SyncAsync(IReadOnlyCollection<ArkContractEntity> contracts, CancellationToken cancellationToken = default)
+    {
+        if (contracts.Count == 0)
+            return;
+
+        var serverInfo = await _clientTransport.GetServerInfoAsync(cancellationToken);
+        var network = serverInfo.Network;
+        var boardingExitDelay = serverInfo.BoardingExit;
+
+        _logger?.LogInformation("Syncing {Count} boarding contracts", contracts.Count);
+
+        foreach (var contractEntity in contracts)
         {
             try
             {
@@ -95,20 +109,18 @@ public class BoardingUtxoSyncService
 
         foreach (var utxo in utxos)
         {
-            // Skip unconfirmed UTXOs
-            if (!utxo.Confirmed)
-            {
-                _logger?.LogDebug("Skipping unconfirmed UTXO {Txid}:{Vout}", utxo.Txid, utxo.Vout);
-                continue;
-            }
-
             onchainOutpoints.Add($"{utxo.Txid}:{utxo.Vout}");
 
             var createdAt = utxo.BlockTime > 0
                 ? DateTimeOffset.FromUnixTimeSeconds(utxo.BlockTime)
                 : DateTimeOffset.UtcNow;
 
-            var expiresAt = ComputeExpiresAt(createdAt, boardingExitDelay);
+            var expiresAt = utxo.Confirmed ? ComputeExpiresAt(createdAt, boardingExitDelay) : null;
+
+            var metadata = new Dictionary<string, string>
+            {
+                ["Confirmed"] = utxo.Confirmed.ToString()
+            };
 
             var arkVtxo = new ArkVtxo(
                 Script: contractEntity.Script,
@@ -120,14 +132,15 @@ public class BoardingUtxoSyncService
                 Swept: false,
                 CreatedAt: createdAt,
                 ExpiresAt: expiresAt,
-                ExpiresAtHeight: utxo.BlockHeight > 0
+                ExpiresAtHeight: utxo.Confirmed && utxo.BlockHeight > 0
                     ? (uint)(utxo.BlockHeight + GetBlockCount(boardingExitDelay))
                     : null,
-                Unrolled: true);
+                Unrolled: true,
+                Metadata: metadata);
 
             await _vtxoStorage.UpsertVtxo(arkVtxo, cancellationToken);
-            _logger?.LogDebug("Upserted boarding VTXO {Txid}:{Vout} ({Amount} sats)",
-                utxo.Txid, utxo.Vout, utxo.Amount);
+            _logger?.LogDebug("Upserted boarding VTXO {Txid}:{Vout} ({Amount} sats, confirmed={Confirmed})",
+                utxo.Txid, utxo.Vout, utxo.Amount, utxo.Confirmed);
         }
 
         // Mark spent: existing unspent VTXOs that are no longer in the provider response

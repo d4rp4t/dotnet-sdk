@@ -52,6 +52,7 @@ public class EfCoreVtxoStorage : IVtxoStorage
         entity.CommitmentTxids = vtxo.CommitmentTxids is { Count: > 0 } ? JsonSerializer.Serialize(vtxo.CommitmentTxids) : null;
         entity.ArkTxid = vtxo.ArkTxid;
         entity.AssetsJson = vtxo.Assets is { Count: > 0 } ? JsonSerializer.Serialize(vtxo.Assets) : null;
+        entity.Metadata = vtxo.Metadata;
 
         if (isNew)
         {
@@ -151,7 +152,8 @@ public class EfCoreVtxoStorage : IVtxoStorage
             Unrolled: entity.Unrolled,
             CommitmentTxids: string.IsNullOrEmpty(entity.CommitmentTxids) ? null : JsonSerializer.Deserialize<List<string>>(entity.CommitmentTxids),
             ArkTxid: entity.ArkTxid,
-            Assets: string.IsNullOrEmpty(entity.AssetsJson) ? null : JsonSerializer.Deserialize<List<VtxoAsset>>(entity.AssetsJson)
+            Assets: string.IsNullOrEmpty(entity.AssetsJson) ? null : JsonSerializer.Deserialize<List<VtxoAsset>>(entity.AssetsJson),
+            Metadata: entity.Metadata
         );
     }
 }

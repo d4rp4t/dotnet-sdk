@@ -93,3 +93,18 @@ jobs:
         run: dotnet pack -c Release -o dist/
       - name: Push to NuGet
         run: dotnet nuget push "dist/*.nupkg" --skip-duplicate -k ${{secrets.NUGET_API_KEY}} -s https://api.nuget.org/v3/index.json
+      - name: Tag per NuGet package
+        run: |
+          for nupkg in dist/*.nupkg; do
+            nuspec=$(unzip -p "$nupkg" '*.nuspec')
+            package_id=$(echo "$nuspec" | grep -oP '<id>\K[^<]+')
+            version=$(echo "$nuspec" | grep -oP '<version>\K[^<]+')
+            tag="${package_id}/${version}"
+            if git rev-parse "$tag" >/dev/null 2>&1; then
+              echo "Tag $tag already exists, skipping"
+            else
+              echo "Tagging: $tag"
+              git tag "$tag"
+            fi
+          done
+          git push origin --tags

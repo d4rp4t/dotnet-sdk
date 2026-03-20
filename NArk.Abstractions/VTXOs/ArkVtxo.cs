@@ -18,7 +18,8 @@ public record ArkVtxo(
     bool Unrolled = false,
     IReadOnlyList<string>? CommitmentTxids = null,
     string? ArkTxid = null,
-    IReadOnlyList<VtxoAsset>? Assets = null)
+    IReadOnlyList<VtxoAsset>? Assets = null,
+    Dictionary<string, string>? Metadata = null)
 {
     public OutPoint OutPoint => new(new uint256(TransactionId), TransactionOutputIndex);
     public TxOut TxOut => new(Money.Satoshis(Amount), NBitcoin.Script.FromHex(Script));

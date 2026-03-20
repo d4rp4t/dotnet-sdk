@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NArk.Abstractions.Contracts;
+using NArk.Abstractions.VTXOs;
 using NArk.Core.Enums;
 using NArk.Core.Models.Options;
 using NArk.Core.Services;
@@ -14,6 +15,7 @@ namespace NArk.Core.Events;
 public class PostBatchVtxoPollingHandler(
     VtxoSynchronizationService vtxoSyncService,
     IContractStorage contractStorage,
+    IVtxoStorage vtxoStorage,
     IOptions<VtxoPollingOptions> options,
     ILogger<PostBatchVtxoPollingHandler>? logger = null
 ) : IEventHandler<PostBatchSessionEvent>
@@ -57,6 +59,26 @@ public class PostBatchVtxoPollingHandler(
                 scripts.Count, walletId);
 
             await vtxoSyncService.PollScriptsForVtxos(scripts, cancellationToken);
+
+            // Mark unrolled inputs (boarding UTXOs) as spent by the commitment tx.
+            // These are on-chain UTXOs not tracked by arkd — we know the spending tx directly.
+            if (@event.Intent.IntentVtxos.Length > 0 && @event.CommitmentTransactionId is not null)
+            {
+                var inputVtxos = await vtxoStorage.GetVtxos(
+                    outpoints: @event.Intent.IntentVtxos,
+                    includeSpent: false,
+                    cancellationToken: cancellationToken);
+
+                foreach (var vtxo in inputVtxos.Where(v => v.Unrolled))
+                {
+                    logger?.LogInformation(
+                        "Marking unrolled VTXO {Outpoint} as spent by commitment tx {CommitmentTxId}",
+                        vtxo.OutPoint, @event.CommitmentTransactionId);
+                    await vtxoStorage.UpsertVtxo(
+                        vtxo with { SpentByTransactionId = @event.CommitmentTransactionId },
+                        cancellationToken);
+                }
+            }
 
             logger?.LogInformation("VTXO polling completed after batch success for wallet {WalletId}", walletId);
         }
