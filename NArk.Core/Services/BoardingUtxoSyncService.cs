@@ -169,9 +169,6 @@ public class BoardingUtxoSyncService
         if (!sequence.IsRelativeLock)
             return null;
 
-        if (sequence.IsRBF)
-            return null;
-
         var seconds = GetRelativeSeconds(sequence);
         return confirmationTime.AddSeconds(seconds);
     }
