@@ -82,6 +82,11 @@ public class BoardingUtxoSyncServiceTests
         SetupContractStorage(entity);
         SetupVtxoStorage();
 
+        // Capture the upserted VTXO before the call
+        ArkVtxo? captured = null;
+        _vtxoStorage.UpsertVtxo(Arg.Do<ArkVtxo>(v => captured = v), Arg.Any<CancellationToken>())
+            .Returns(true);
+
         _utxoProvider.GetUtxosAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns([
                 new BoardingUtxo(
@@ -97,11 +102,6 @@ public class BoardingUtxoSyncServiceTests
             _contractStorage, _vtxoStorage, _clientTransport, _utxoProvider);
 
         await service.SyncAsync(CancellationToken.None);
-
-        ArkVtxo? captured = null;
-        await _vtxoStorage.Received(1).UpsertVtxo(
-            Arg.Do<ArkVtxo>(v => captured = v),
-            Arg.Any<CancellationToken>());
 
         Assert.That(captured, Is.Not.Null);
         Assert.Multiple(() =>
@@ -128,6 +128,11 @@ public class BoardingUtxoSyncServiceTests
         SetupContractStorage(entity);
         SetupVtxoStorage();
 
+        // Capture the upserted VTXO before the call
+        ArkVtxo? captured = null;
+        _vtxoStorage.UpsertVtxo(Arg.Do<ArkVtxo>(v => captured = v), Arg.Any<CancellationToken>())
+            .Returns(true);
+
         _utxoProvider.GetUtxosAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns([
                 new BoardingUtxo(
@@ -143,11 +148,6 @@ public class BoardingUtxoSyncServiceTests
             _contractStorage, _vtxoStorage, _clientTransport, _utxoProvider);
 
         await service.SyncAsync(CancellationToken.None);
-
-        ArkVtxo? captured = null;
-        await _vtxoStorage.Received(1).UpsertVtxo(
-            Arg.Do<ArkVtxo>(v => captured = v),
-            Arg.Any<CancellationToken>());
 
         Assert.That(captured, Is.Not.Null);
         Assert.Multiple(() =>
