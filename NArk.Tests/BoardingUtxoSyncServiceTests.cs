@@ -106,12 +106,15 @@ public class BoardingUtxoSyncServiceTests
                 v.Amount == 100000 &&
                 v.Unrolled == true &&
                 v.Swept == false &&
-                v.SpentByTransactionId == null),
+                v.SpentByTransactionId == null &&
+                v.ExpiresAt != null &&
+                v.Metadata != null &&
+                v.Metadata["Confirmed"] == "True"),
             Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task SyncAsync_UnconfirmedUtxo_IsSkipped()
+    public async Task SyncAsync_UnconfirmedUtxo_IsUpsertedWithNullExpiry()
     {
         var contract = new ArkBoardingContract(TestServerKey, BoardingExitDelay, TestUserKey);
         var entity = contract.ToEntity("test-wallet");
@@ -135,8 +138,16 @@ public class BoardingUtxoSyncServiceTests
 
         await service.SyncAsync(CancellationToken.None);
 
-        await _vtxoStorage.DidNotReceive().UpsertVtxo(
-            Arg.Any<ArkVtxo>(), Arg.Any<CancellationToken>());
+        await _vtxoStorage.Received(1).UpsertVtxo(
+            Arg.Is<ArkVtxo>(v =>
+                v.Script == entity.Script &&
+                v.Amount == 50000 &&
+                v.Unrolled == true &&
+                v.ExpiresAt == null &&
+                v.ExpiresAtHeight == null &&
+                v.Metadata != null &&
+                v.Metadata["Confirmed"] == "False"),
+            Arg.Any<CancellationToken>());
     }
 
     [Test]
