@@ -26,7 +26,7 @@ public record ArkServerInfo(
     /// Whether boarding (onchain UTXOs) is allowed by the server.
     /// UtxoMaxAmount == 0 means boarding is not allowed.
     /// </summary>
-    public bool BoardingAllowed => UtxoMaxAmount != Money.Zero;
+    public bool BoardingAllowed => UtxoMaxAmount is null || UtxoMaxAmount != Money.Zero;
 };
 
 public record ArkOperatorFeeTerms(
