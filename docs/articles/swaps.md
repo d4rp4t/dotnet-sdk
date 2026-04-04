@@ -21,12 +21,23 @@ services.Configure<BoltzOptions>(opts =>
 });
 ```
 
-## Submarine Swap (Lightning → Ark)
+## Submarine Swap (Arkade → Lightning)
+
+Pay a Lightning invoice from your Arkade wallet:
+
+```csharp
+var swap = await swapService.CreateSubmarineSwap(
+    walletId,
+    bolt11Invoice,
+    cancellationToken: ct);
+```
+
+## Reverse Swap (Lightning → Arkade)
 
 Receive a Lightning payment as a VTXO:
 
 ```csharp
-var swap = await swapService.CreateSubmarineSwap(
+var swap = await swapService.CreateReverseSwap(
     walletId,
     amountSats: 50_000,
     cancellationToken: ct);
@@ -35,23 +46,12 @@ var swap = await swapService.CreateSubmarineSwap(
 // The SDK monitors the swap and creates the VTXO automatically
 ```
 
-## Reverse Swap (Ark → Lightning)
+## Chain Swap (BTC ↔ Arkade)
 
-Pay a Lightning invoice from your Ark wallet:
-
-```csharp
-var swap = await swapService.CreateReverseSwap(
-    walletId,
-    bolt11Invoice,
-    cancellationToken: ct);
-```
-
-## Chain Swap (BTC ↔ Ark)
-
-Move funds between on-chain Bitcoin and Ark:
+Move funds between on-chain Bitcoin and Arkade:
 
 ```csharp
-// BTC → Ark
+// BTC → Arkade
 var swap = await swapService.CreateChainSwap(
     walletId,
     direction: ChainSwapDirection.BtcToArk,
