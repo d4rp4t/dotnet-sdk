@@ -1,6 +1,7 @@
 using NArk.Abstractions.Intents;
 using NArk.Core;
 using NArk.Abstractions.Extensions;
+using NArk.Core.Helpers;
 using NArk.Core.Transport;
 using NBitcoin;
 using NBitcoin.Secp256k1;
@@ -264,7 +265,37 @@ public class CachingClientTransportTests
         Assert.That(info.VtxoMaxAmount, Is.EqualTo(Money.Coins(21_000_000m)));
     }
 
+    [Test]
+    public async Task ServerInfoLimits_AreExposedFromGetInfo()
+    {
+        var serverInfoWithLimits = CreateServerInfo(maxOpReturnOutputs: 5, maxTxWeight: 40000);
+        var inner = Substitute.For<IClientTransport>();
+        inner.GetServerInfoAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(serverInfoWithLimits));
+
+        var transport = new CachingClientTransport(inner, logger: null);
+        var result = await transport.GetServerInfoAsync();
+
+        Assert.That(result.MaxOpReturnOutputs, Is.EqualTo(5));
+        Assert.That(result.MaxTxWeight, Is.EqualTo(40000));
+    }
+
+    [Test]
+    public async Task ServerInfoLimits_DefaultToZero_WhenNotReported()
+    {
+        var serverInfoNoLimits = CreateServerInfo(maxOpReturnOutputs: 0);
+        var inner = Substitute.For<IClientTransport>();
+        inner.GetServerInfoAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(serverInfoNoLimits));
+
+        var transport = new CachingClientTransport(inner, logger: null);
+        var result = await transport.GetServerInfoAsync();
+
+        Assert.That(result.MaxOpReturnOutputs, Is.EqualTo(0));
+    }
+
     private static ArkServerInfo CreateServerInfo(
+        int maxOpReturnOutputs = 0, long maxTxWeight = 0,
         Money? vtxoMinAmount = null, Money? vtxoMaxAmount = null,
         Money? utxoMinAmount = null, Money? utxoMaxAmount = null)
     {
@@ -286,6 +317,8 @@ public class CachingClientTransportTests
             CheckpointTapScript: new NArk.Core.Scripts.UnilateralPathArkTapScript(
                 new Sequence(144), emptyMultisig),
             FeeTerms: new ArkOperatorFeeTerms("1", "0", "0", "0", "0"),
+            MaxTxWeight: maxTxWeight,
+            MaxOpReturnOutputs: maxOpReturnOutputs,
             VtxoMinAmount: vtxoMinAmount ?? Money.Zero,
             VtxoMaxAmount: vtxoMaxAmount ?? Money.Coins(21_000_000m),
             UtxoMinAmount: utxoMinAmount ?? Money.Zero,
