@@ -63,6 +63,7 @@ builder.Services.AddSingleton<IAssetManager, AssetManager>();
 // ── Wallet service (replaces gateway API client) ──
 builder.Services.AddSingleton<ArkWalletService>();
 builder.Services.AddSingleton<WalletState>();
+builder.Services.AddSingleton(new LnurlHelper(new HttpClient()));
 
 var host = builder.Build();
 

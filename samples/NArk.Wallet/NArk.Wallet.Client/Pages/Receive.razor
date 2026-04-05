@@ -22,7 +22,7 @@
             <div class="skeleton" style="height:68px;border-radius:14px;"></div>
         </div>
     }
-    else if (_arkAddress is null)
+    else if (_receiveInfo is null)
     {
         <div class="empty-state">
             <p>Create a wallet first to receive funds</p>
@@ -183,11 +183,13 @@
             </span>
         </div>
 
-        <div class="qr-container mb-16">
-            @if (_displayAddress is not null)
-            {
-                @((MarkupString)QrCodeHelper.GenerateSvg(_displayAddress))
-            }
+        <div style="display:flex;justify-content:center;" class="mb-16">
+            <div class="qr-container">
+                @if (_displayAddress is not null)
+                {
+                    @((MarkupString)QrCodeHelper.GenerateSvg(_displayAddress))
+                }
+            </div>
         </div>
 
         @if (_amountSats > 0 && _selectedAssetId is null)
@@ -216,15 +218,36 @@
             </p>
         }
 
-        <div class="address-display mb-16">
+        <div class="address-display mb-12">
             @_displayAddress
         </div>
+
+        <!-- Contract Script (for Ark/Boarding) -->
+        @if (_displayContractScript is not null)
+        {
+            <div @onclick="@(() => _showContract = !_showContract)"
+                 style="cursor:pointer;margin-bottom:16px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;">
+                    <span class="text-secondary" style="font-size:11px;font-weight:500;">Contract</span>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                         style="color:var(--text-tertiary);transform:rotate(@(_showContract ? "90" : "0")deg);transition:transform 0.2s;">
+                        <path d="M9 18l6-6-6-6"/>
+                    </svg>
+                </div>
+            </div>
+            @if (_showContract)
+            {
+                <div class="address-display mb-16" style="font-size:9px;line-height:1.5;max-height:120px;overflow-y:auto;">
+                    @_displayContractScript
+                </div>
+            }
+        }
 
         <div style="display:flex;gap:8px;">
             <button class="btn btn-primary" style="flex:1;" @onclick="CopyAddress">
                 @(_copied ? "Copied!" : _selectedMethod == "lightning" ? "Copy Invoice" : "Copy Address")
             </button>
-            <button class="btn btn-secondary" @onclick="@(() => { _selectedMethod = null; _copied = false; _swapError = null; })">
+            <button class="btn btn-secondary" @onclick="@(() => { _selectedMethod = null; _copied = false; _swapError = null; _showContract = false; })">
                 Back
             </button>
         </div>
@@ -232,15 +255,16 @@
 </div>
 
 @code {
-    private string? _arkAddress;
-    private string? _boardingAddress;
+    private ArkWalletService.ReceiveInfo? _receiveInfo;
     private string? _selectedMethod;
     private string? _displayAddress;
+    private string? _displayContractScript;
     private string? _selectedAssetId;
     private long _amountSats;
     private bool _loading = true;
     private bool _copied;
     private bool _initiatingSwap;
+    private bool _showContract;
     private string? _swapError;
     private long _chainSwapExpectedSats;
     private BoltzAllLimits? _boltzLimits;
@@ -255,9 +279,7 @@
                 var limitsTask = Ark.GetBoltzLimits();
                 await Task.WhenAll(receiveTask, limitsTask);
 
-                var (ark, boarding) = receiveTask.Result;
-                _arkAddress = ark;
-                _boardingAddress = boarding;
+                _receiveInfo = receiveTask.Result;
                 _boltzLimits = limitsTask.Result;
             }
             catch { }
@@ -285,23 +307,33 @@
     {
         _selectedMethod = method;
         _swapError = null;
+        _showContract = false;
 
         if (method == "lightning")
         {
+            _displayContractScript = null;
             await InitiateReverseSwap();
             return;
         }
 
         if (method == "chainswap")
         {
+            _displayContractScript = null;
             await InitiateChainSwap();
             return;
         }
 
         _displayAddress = method switch
         {
-            "ark" => _arkAddress,
-            "boarding" => _boardingAddress,
+            "ark" => _receiveInfo?.ArkAddress,
+            "boarding" => _receiveInfo?.BoardingAddress,
+            _ => null
+        };
+
+        _displayContractScript = method switch
+        {
+            "ark" => _receiveInfo?.ArkContractScript,
+            "boarding" => _receiveInfo?.BoardingContractScript,
             _ => null
         };
     }

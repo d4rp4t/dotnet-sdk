@@ -825,6 +825,62 @@ html, body, #app {
 
 .amount-input-row input::placeholder { color: var(--text-tertiary); }
 
+/* ── Mnemonic Word Grid ───────────────────── */
+.mnemonic-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+}
+
+.mnemonic-word {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-card);
+    border-radius: 10px;
+}
+
+.mnemonic-index {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    font-weight: 600;
+    min-width: 16px;
+}
+
+.mnemonic-text {
+    font-size: 13px;
+    font-weight: 500;
+    font-family: var(--font-mono);
+}
+
+/* ── Amount Display Input ─────────────────── */
+.amount-display-input {
+    font-size: 56px;
+    font-weight: 600;
+    letter-spacing: -2px;
+    text-align: center;
+    padding: 20px 0;
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+    background: transparent;
+    border: none;
+    outline: none;
+    width: 100%;
+    -moz-appearance: textfield;
+}
+
+.amount-display-input::-webkit-outer-spin-button,
+.amount-display-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.amount-display-input::placeholder {
+    color: var(--text-tertiary);
+}
+
 .amount-input-row .unit {
     font-size: 14px;
     color: var(--text-secondary);

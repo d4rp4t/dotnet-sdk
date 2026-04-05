@@ -6,6 +6,7 @@
 @using NArk.Wallet.Client.Services
 @using NArk.Abstractions.Contracts
 @using NArk.Abstractions.VTXOs
+@using NArk.Hosting
 
 <div class="page-header">
     <a href="./" class="back-btn">
@@ -96,6 +97,20 @@
                     <span class="text-secondary" style="font-size:13px;">Network</span>
                     <span style="font-size:13px;font-weight:500;">@_serverNetwork</span>
                 </div>
+                @if (_networkConfig is not null)
+                {
+                    <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+                        <span class="text-secondary" style="font-size:13px;">Arkade Server</span>
+                        <span class="mono" style="font-size:11px;">@_networkConfig.ArkUri</span>
+                    </div>
+                    @if (_networkConfig.ArkadeWalletUri is not null)
+                    {
+                        <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+                            <span class="text-secondary" style="font-size:13px;">Delegate Server</span>
+                            <span class="mono" style="font-size:11px;">@_networkConfig.ArkadeWalletUri</span>
+                        </div>
+                    }
+                }
                 @if (_serverPubkey is not null)
                 {
                     <div>
@@ -162,6 +177,16 @@
             <span class="section-title" style="color:var(--arkade-red);">Danger Zone</span>
         </div>
 
+        <div class="glass-card mt-12 mb-16" style="border-color:rgba(224,82,82,0.2);">
+            <a href="./backup" style="display:flex;align-items:center;justify-content:space-between;text-decoration:none;color:inherit;">
+                <div>
+                    <p style="font-size:14px;font-weight:600;">Backup Secret</p>
+                    <p class="text-secondary" style="font-size:12px;">View your recovery phrase or nsec</p>
+                </div>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-tertiary);flex-shrink:0;"><path d="M9 18l6-6-6-6"/></svg>
+            </a>
+        </div>
+
         <div class="glass-card mt-12 mb-24" style="border-color:rgba(224,82,82,0.2);">
             <p class="text-secondary mb-12" style="font-size:12px;">
                 Deleting your wallet removes it from this device. Make sure you have backed up your secret.
@@ -192,6 +217,7 @@
     private bool _loading = true;
     private string? _serverNetwork;
     private string? _serverPubkey;
+    private ArkNetworkConfig? _networkConfig;
     private IReadOnlyCollection<ArkVtxo>? _vtxos;
     private IReadOnlyCollection<ArkContractEntity>? _contracts;
     private string? _copiedField;
@@ -218,6 +244,7 @@
                 var info = serverTask.Result;
                 _serverNetwork = info.Network?.Name ?? "Unknown";
                 _serverPubkey = info.SignerKey?.ToString();
+                _networkConfig = Ark.GetNetworkConfig();
             }
             catch { }
         }

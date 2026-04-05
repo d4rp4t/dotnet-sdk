@@ -2,6 +2,10 @@
 @inject ArkWalletService Ark
 @inject WalletState State
 @inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject LnurlHelper Lnurl
+@using NArk.Wallet.Client.Services
+@using NArk.Swaps.Boltz
 
 <div class="page-header">
     <a href="./" class="back-btn">
@@ -11,54 +15,178 @@
 </div>
 
 <div class="px-20">
-    @if (_step == 0)
+    @if (_step == Step.Input)
     {
-        <!-- Amount Entry -->
-        <div class="amount-display @(_amount == "0" ? "empty" : "")">
-            @_amount<span class="balance-unit">sats</span>
+        <!-- Destination input -->
+        <label class="input-label">To</label>
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
+            <input class="input-field" style="flex:1;font-size:12px;" @bind="_rawInput" @bind:event="oninput"
+                   @onkeyup="OnInputChanged"
+                   placeholder="Ark address, BTC address, LN invoice, or BIP21 URI" />
+            <button class="btn btn-sm btn-secondary" style="flex-shrink:0;padding:8px 12px;" @onclick="PasteFromClipboard"
+                    title="Paste from clipboard">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            </button>
         </div>
 
-        <p class="text-center text-secondary mb-16" style="font-size:12px;">
-            Available: @FormatSats(State.BalanceSats) sats
-        </p>
+        @if (_parseError is not null)
+        {
+            <p style="color:var(--arkade-red);font-size:11px;margin-bottom:12px;">@_parseError</p>
+        }
 
-        <div class="numpad">
-            @foreach (var key in _numpadKeys)
+        @if (_parsedType is not null)
+        {
+            <!-- Parsed result -->
+            <div class="glass-card mb-16" style="padding:10px 14px;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                    <span class="pill @TypePill(_parsedType)" style="font-size:9px;">@_parsedType.ToUpper()</span>
+                    @if (_parsedAsset is not null)
+                    {
+                        <span class="pill pill-info" style="font-size:8px;">ASSET</span>
+                    }
+                </div>
+                @if (_parsedAddress is not null)
+                {
+                    <p class="mono text-secondary" style="font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                        @_parsedAddress
+                    </p>
+                }
+                @if (_parsedAmountSats > 0)
+                {
+                    <p style="font-size:12px;margin-top:4px;">Amount: <strong>@_parsedAmountSats.ToString("N0")</strong> sats (from URI)</p>
+                }
+            </div>
+
+            <!-- Amount entry (if not already in URI) -->
+            @if (_parsedAmountSats == 0 && _parsedType != "lightning")
             {
-                <button class="numpad-key @(key == "" ? "empty" : "")"
-                        @onclick="() => OnNumpadKey(key)"
-                        disabled="@(key == "")">@key</button>
+                <div class="amount-input-row mb-16">
+                    <input type="number" @bind="_manualAmount" @bind:event="oninput"
+                           placeholder="Amount" inputmode="numeric" />
+                    <span class="unit">sats</span>
+                </div>
             }
+
+            <!-- Send method options based on parsed type -->
+            <div class="flex-col gap-12 mb-16">
+                @if (_parsedType == "ark")
+                {
+                    <div class="method-card ark" @onclick="@(() => DoSend("ark"))">
+                        <div class="method-icon ark">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10"/></svg>
+                        </div>
+                        <div class="method-info">
+                            <div class="method-name">Send via Ark</div>
+                            <div class="method-desc">Instant off-chain transfer@(_parsedAsset is not null ? " (required for assets)" : "")</div>
+                        </div>
+                    </div>
+                }
+                else if (_parsedType == "lightning")
+                {
+                    <div class="method-card lightning" @onclick="@(() => DoSend("lightning"))">
+                        <div class="method-icon lightning">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10"/></svg>
+                        </div>
+                        <div class="method-info">
+                            <div class="method-name">Pay Lightning Invoice</div>
+                            <div class="method-desc">Send from Ark wallet via Boltz submarine swap</div>
+                        </div>
+                        <span class="pill pill-info" style="font-size:9px;">BOLTZ</span>
+                    </div>
+                }
+                else if (_parsedType == "lnurl")
+                {
+                    @if (_resolvingLnurl)
+                    {
+                        <div class="skeleton" style="height:68px;border-radius:14px;"></div>
+                    }
+                    else if (_lnurlParams is not null)
+                    {
+                        <div class="glass-card mb-12" style="padding:10px 14px;">
+                            <p class="text-secondary" style="font-size:11px;">
+                                @_lnurlParams.Description
+                            </p>
+                            <p style="font-size:12px;margin-top:4px;">
+                                Range: <strong>@_lnurlParams.MinSendable.ToString("N0")</strong>–<strong>@_lnurlParams.MaxSendable.ToString("N0")</strong> sats
+                            </p>
+                        </div>
+
+                        <div class="amount-input-row mb-12">
+                            <input type="number" @bind="_manualAmount" @bind:event="oninput"
+                                   placeholder="Amount" inputmode="numeric"
+                                   min="@_lnurlParams.MinSendable" max="@_lnurlParams.MaxSendable" />
+                            <span class="unit">sats</span>
+                        </div>
+
+                        <div class="method-card lightning" @onclick="@(() => DoSend("lnurl"))">
+                            <div class="method-icon lightning">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10"/></svg>
+                            </div>
+                            <div class="method-info">
+                                <div class="method-name">Pay via LNURL</div>
+                                <div class="method-desc">Send to Lightning Address via Boltz</div>
+                            </div>
+                            <span class="pill pill-info" style="font-size:9px;">BOLTZ</span>
+                        </div>
+                    }
+                }
+                else if (_parsedType == "onchain")
+                {
+                    <!-- Collab exit option -->
+                    <div class="method-card onchain" @onclick="@(() => DoSend("collabexit"))">
+                        <div class="method-icon onchain">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
+                        </div>
+                        <div class="method-info">
+                            <div class="method-name">Collaborative Exit</div>
+                            <div class="method-desc">Send on-chain via Ark batch round</div>
+                        </div>
+                    </div>
+
+                    @if (EffectiveAmount > 0 && IsWithinChainSwapLimits())
+                    {
+                        <!-- Chain swap option -->
+                        <div class="method-card lightning" @onclick="@(() => DoSend("chainswap"))">
+                            <div class="method-icon onchain">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>
+                            </div>
+                            <div class="method-info">
+                                <div class="method-name">Chain Swap (Boltz)</div>
+                                <div class="method-desc">Send on-chain via Boltz ARK→BTC swap</div>
+                            </div>
+                            <span class="pill pill-info" style="font-size:9px;">BOLTZ</span>
+                        </div>
+                    }
+                }
+            </div>
+        }
+        else
+        {
+            <p class="text-center text-secondary mt-24" style="font-size:13px;">
+                Paste or scan an address to see send options
+            </p>
+        }
+    }
+    else if (_step == Step.Sending)
+    {
+        <div class="text-center" style="padding:60px 0;">
+            <div class="skeleton" style="width:60px;height:60px;border-radius:50%;margin:0 auto 16px;"></div>
+            <p style="font-size:16px;font-weight:600;">Sending...</p>
+            <p class="text-secondary" style="font-size:13px;margin-top:4px;">@_sendMethodLabel</p>
         </div>
-
-        <button class="btn btn-primary btn-full mt-20" @onclick="GoToAddress"
-                disabled="@(_amount == "0")">
-            Next
-        </button>
     }
-    else if (_step == 1)
+    else if (_step == Step.Success)
     {
-        <!-- Address Entry -->
-        <p class="text-center mb-16" style="font-size:32px;font-weight:600;">
-            @_amount <span class="balance-unit">sats</span>
-        </p>
-
-        <label class="input-label">Destination Address</label>
-        <input class="input-field" @bind="_address" placeholder="tark1q... or ark1q..." />
-
-        <button class="btn btn-primary btn-full mt-20" @onclick="ConfirmSend"
-                disabled="@(string.IsNullOrWhiteSpace(_address) || _sending)">
-            @(_sending ? "Sending..." : "Send")
-        </button>
-    }
-    else if (_step == 2)
-    {
-        <!-- Success -->
         <div class="text-center" style="padding:40px 0;">
-            <div style="font-size:48px;margin-bottom:16px;">✓</div>
+            <div style="width:60px;height:60px;border-radius:50%;background:rgba(96,177,138,0.15);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--arkade-green)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
             <p style="font-size:20px;font-weight:600;margin-bottom:8px;">Sent!</p>
-            <p class="text-secondary mono" style="font-size:12px;">@_txId</p>
-            <button class="btn btn-secondary mt-24" @onclick="@(() => Nav.NavigateTo("/"))">
+            @if (_txId is not null)
+            {
+                <p class="text-secondary mono" style="font-size:11px;word-break:break-all;padding:0 20px;">@_txId</p>
+            }
+            <button class="btn btn-secondary mt-24" @onclick="@(() => Nav.NavigateTo("./"))">
                 Back to Home
             </button>
         </div>
@@ -66,54 +194,281 @@
 
     @if (_error is not null)
     {
-        <p style="color:var(--arkade-red);font-size:13px;margin-top:12px;text-align:center;">@_error</p>
+        <div class="glass-card mt-16" style="border-color:rgba(224,82,82,0.2);">
+            <p style="color:var(--arkade-red);font-size:13px;">@_error</p>
+            @if (_step == Step.Sending)
+            {
+                <button class="btn btn-sm btn-secondary mt-12" @onclick="@(() => { _step = Step.Input; _error = null; })">
+                    Back
+                </button>
+            }
+        </div>
     }
 </div>
 
 @code {
-    private int _step;
-    private string _amount = "0";
-    private string _address = "";
+    private enum Step { Input, Sending, Success }
+    private Step _step = Step.Input;
+
+    private string _rawInput = "";
+    private string? _parsedType; // "ark", "onchain", "lightning"
+    private string? _parsedAddress;
+    private string? _parsedAsset;
+    private long _parsedAmountSats;
+    private long _manualAmount;
+    private string? _parseError;
     private string? _txId;
     private string? _error;
-    private bool _sending;
+    private string _sendMethodLabel = "";
+    private BoltzAllLimits? _boltzLimits;
+    private LnurlHelper.LnurlPayParams? _lnurlParams;
+    private bool _resolvingLnurl;
 
-    private readonly string[] _numpadKeys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "⌫"];
+    private long EffectiveAmount => _parsedAmountSats > 0 ? _parsedAmountSats : _manualAmount;
 
-    private void OnNumpadKey(string key)
+    protected override async Task OnInitializedAsync()
     {
-        if (key == "⌫")
+        try { _boltzLimits = await Ark.GetBoltzLimits(); } catch { }
+    }
+
+    private void OnInputChanged() => ParseInput(_rawInput);
+
+    private async Task PasteFromClipboard()
+    {
+        try
         {
-            _amount = _amount.Length > 1 ? _amount[..^1] : "0";
+            var text = await JS.InvokeAsync<string>("navigator.clipboard.readText");
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                _rawInput = text.Trim();
+                ParseInput(_rawInput);
+            }
         }
-        else if (key != "")
+        catch
         {
-            _amount = _amount == "0" ? key : _amount + key;
+            _parseError = "Clipboard access denied. Please paste manually.";
         }
     }
 
-    private void GoToAddress() => _step = 1;
-
-    private async Task ConfirmSend()
+    private void ParseInput(string input)
     {
-        if (State.ActiveWalletId is null) return;
-        _sending = true;
-        _error = null;
+        _parsedType = null;
+        _parsedAddress = null;
+        _parsedAsset = null;
+        _parsedAmountSats = 0;
+        _parseError = null;
+
+        if (string.IsNullOrWhiteSpace(input)) return;
+
+        input = input.Trim();
+
+        // BIP21 URI: bitcoin:address?amount=X&ark=tark1q...&asset=...
+        if (input.StartsWith("bitcoin:", StringComparison.OrdinalIgnoreCase))
+        {
+            ParseBip21(input);
+            return;
+        }
+
+        // Lightning invoice
+        if (input.StartsWith("lnbc", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("lntbs", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("lntb", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("lnbcrt", StringComparison.OrdinalIgnoreCase))
+        {
+            _parsedType = "lightning";
+            _parsedAddress = input;
+            return;
+        }
+
+        // Ark address
+        if (input.StartsWith("tark1", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("ark1", StringComparison.OrdinalIgnoreCase))
+        {
+            _parsedType = "ark";
+            _parsedAddress = input;
+            return;
+        }
+
+        // On-chain Bitcoin address (bech32)
+        if (input.StartsWith("bc1", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("tb1", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("bcrt1", StringComparison.OrdinalIgnoreCase))
+        {
+            _parsedType = "onchain";
+            _parsedAddress = input;
+            return;
+        }
+
+        // Legacy addresses
+        if (input.StartsWith("1") || input.StartsWith("3") || input.StartsWith("m") || input.StartsWith("n") || input.StartsWith("2"))
+        {
+            _parsedType = "onchain";
+            _parsedAddress = input;
+            return;
+        }
+
+        // LNURL / Lightning Address
+        if (LnurlHelper.IsLnurl(input))
+        {
+            _parsedType = "lnurl";
+            _parsedAddress = input;
+            _ = ResolveLnurl(input);
+            return;
+        }
+
+        _parseError = "Unrecognized address format";
+    }
+
+    private void ParseBip21(string uri)
+    {
+        try
+        {
+            // bitcoin:address?param=value&...
+            var withoutScheme = uri["bitcoin:".Length..];
+            var qIdx = withoutScheme.IndexOf('?');
+            var address = qIdx >= 0 ? withoutScheme[..qIdx] : withoutScheme;
+            var queryParams = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            if (qIdx >= 0)
+            {
+                var queryString = withoutScheme[(qIdx + 1)..];
+                foreach (var pair in queryString.Split('&'))
+                {
+                    var eqIdx = pair.IndexOf('=');
+                    if (eqIdx > 0)
+                    {
+                        queryParams[Uri.UnescapeDataString(pair[..eqIdx])] = Uri.UnescapeDataString(pair[(eqIdx + 1)..]);
+                    }
+                }
+            }
+
+            // Check for ark query parameter — takes priority
+            if (queryParams.TryGetValue("ark", out var arkAddress) && !string.IsNullOrWhiteSpace(arkAddress))
+            {
+                _parsedType = "ark";
+                _parsedAddress = arkAddress;
+            }
+            else if (!string.IsNullOrWhiteSpace(address))
+            {
+                _parsedType = "onchain";
+                _parsedAddress = address;
+            }
+
+            // Parse amount (BIP21 amount is in BTC)
+            if (queryParams.TryGetValue("amount", out var amountStr) &&
+                decimal.TryParse(amountStr, System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var btcAmount))
+            {
+                _parsedAmountSats = (long)(btcAmount * 100_000_000m);
+            }
+
+            // Asset param — restricts to Ark only
+            if (queryParams.TryGetValue("asset", out var assetId) && !string.IsNullOrWhiteSpace(assetId))
+            {
+                _parsedAsset = assetId;
+                _parsedType = "ark"; // Force Ark — assets can't traverse other channels
+                if (_parsedAddress is null && !string.IsNullOrWhiteSpace(address))
+                    _parsedAddress = address;
+            }
+
+            if (_parsedAddress is null)
+                _parseError = "Could not parse address from BIP21 URI";
+        }
+        catch
+        {
+            _parseError = "Invalid BIP21 URI";
+        }
+    }
+
+    private bool IsWithinChainSwapLimits()
+    {
+        if (_boltzLimits?.ChainBtcToArkMinAmount is null) return false;
+        var amt = EffectiveAmount;
+        return amt >= _boltzLimits.ChainBtcToArkMinAmount && amt <= _boltzLimits.ChainBtcToArkMaxAmount;
+    }
+
+    private async Task ResolveLnurl(string input)
+    {
+        _resolvingLnurl = true;
+        _lnurlParams = null;
+        StateHasChanged();
 
         try
         {
-            _txId = await Ark.Send(State.ActiveWalletId, _address, long.Parse(_amount));
-            _step = 2;
+            _lnurlParams = await Lnurl.ResolveAsync(input);
+        }
+        catch (Exception ex)
+        {
+            _parseError = $"LNURL resolve failed: {ex.Message}";
+            _parsedType = null;
+        }
+        finally
+        {
+            _resolvingLnurl = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
 
+    private async Task DoSend(string method)
+    {
+        if (State.ActiveWalletId is null || _parsedAddress is null) return;
+
+        var amount = EffectiveAmount;
+        if (amount <= 0 && method != "lightning")
+        {
+            _error = "Please enter an amount";
+            return;
+        }
+
+        _step = Step.Sending;
+        _error = null;
+        _sendMethodLabel = method switch
+        {
+            "ark" => "Sending via Ark...",
+            "lightning" => "Paying Lightning invoice via Boltz...",
+            "collabexit" => "Collaborative exit to on-chain...",
+            "chainswap" => "Sending via Boltz ARK→BTC chain swap...",
+            _ => "Sending..."
+        };
+        StateHasChanged();
+
+        try
+        {
+            if (method == "lnurl" && _lnurlParams is not null)
+            {
+                // Fetch invoice from LNURL callback, then pay via submarine swap
+                var invoice = await Lnurl.FetchInvoiceAsync(_lnurlParams.Callback, amount);
+                _txId = await Ark.PayLightningInvoice(State.ActiveWalletId, invoice);
+            }
+            else
+            {
+                _txId = method switch
+                {
+                    "ark" => await Ark.Send(State.ActiveWalletId, _parsedAddress, amount),
+                    "lightning" => await Ark.PayLightningInvoice(State.ActiveWalletId, _parsedAddress),
+                    "collabexit" => await Ark.CollaborativeExit(State.ActiveWalletId, _parsedAddress, amount),
+                    "chainswap" => await Ark.SendArkToBtcChainSwap(State.ActiveWalletId, amount, _parsedAddress),
+                    _ => throw new InvalidOperationException("Unknown method")
+                };
+            }
+
+            _step = Step.Success;
             var balance = await Ark.GetBalance(State.ActiveWalletId);
             State.UpdateBalance(balance);
         }
         catch (Exception ex)
         {
             _error = ex.Message;
+            _step = Step.Input;
         }
-        finally { _sending = false; }
     }
 
-    private static string FormatSats(long sats) => sats.ToString("N0");
+    private static string TypePill(string? type) => type switch
+    {
+        "ark" => "pill-info",
+        "lightning" => "pill-success",
+        "lnurl" => "pill-success",
+        "onchain" => "pill-warning",
+        _ => "pill-info"
+    };
 }

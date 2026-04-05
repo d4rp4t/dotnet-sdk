@@ -8,6 +8,7 @@ using NArk.Core;
 using NArk.Core.Services;
 using NArk.Core.Transport;
 using NArk.Core.Wallet;
+using NArk.Hosting;
 using NArk.Swaps.Abstractions;
 using NArk.Swaps.Boltz;
 using NArk.Swaps.Services;
@@ -29,8 +30,10 @@ public class ArkWalletService(
     IContractStorage contractStorage,
     ISwapStorage swapStorage,
     IAssetManager assetManager,
+    IOnchainService onchainService,
     SwapsManagementService swapsManagementService,
-    BoltzLimitsValidator boltzLimitsValidator)
+    BoltzLimitsValidator boltzLimitsValidator,
+    ArkNetworkConfig networkConfig)
 {
     // ── Wallets ──
 
@@ -76,23 +79,28 @@ public class ArkWalletService(
 
     // ── Receive ──
 
-    public async Task<(string ArkAddress, string BoardingAddress)> GetReceiveInfo(string walletId)
+    public record ReceiveInfo(
+        string ArkAddress, string BoardingAddress,
+        string ArkContractScript, string BoardingContractScript);
+
+    public async Task<ReceiveInfo> GetReceiveInfo(string walletId)
     {
         var addressProvider = await walletProvider.GetAddressProviderAsync(walletId)
             ?? throw new InvalidOperationException("Wallet not found");
 
         var serverInfo = await transport.GetServerInfoAsync();
 
-        var (contract, _) = await addressProvider.GetNextContract(
+        var (contract, contractEntity) = await addressProvider.GetNextContract(
             NextContractPurpose.Receive, ContractActivityState.Active);
         var arkAddress = contract.GetArkAddress().ToString(serverInfo.Network == Network.Main);
 
-        var (boardingContract, _) = await addressProvider.GetNextContract(
+        var (boardingContract, boardingEntity) = await addressProvider.GetNextContract(
             NextContractPurpose.Boarding, ContractActivityState.Active);
         var boardingAddress = boardingContract.GetScriptPubKey()
             .GetDestinationAddress(serverInfo.Network)?.ToString() ?? "";
 
-        return (arkAddress, boardingAddress);
+        return new ReceiveInfo(arkAddress, boardingAddress,
+            contractEntity.Script, boardingEntity.Script);
     }
 
     // ── Swaps ──
@@ -161,6 +169,38 @@ public class ArkWalletService(
 
     public async Task<ArkServerInfo> GetServerInfo()
         => await transport.GetServerInfoAsync();
+
+    // ── Collaborative Exit (on-chain send) ──
+
+    public async Task<string> CollaborativeExit(string walletId, string btcAddress, long amountSats)
+    {
+        var serverInfo = await transport.GetServerInfoAsync();
+        var addr = BitcoinAddress.Create(btcAddress, serverInfo.Network);
+        var output = new ArkTxOut(ArkTxOutType.Onchain, Money.Satoshis(amountSats), addr);
+        return await onchainService.InitiateCollaborativeExit(walletId, output);
+    }
+
+    // ── Submarine Swap (Ark → Lightning) ──
+
+    public async Task<string> PayLightningInvoice(string walletId, string bolt11Invoice)
+    {
+        var serverInfo = await transport.GetServerInfoAsync();
+        var invoice = BOLT11PaymentRequest.Parse(bolt11Invoice, serverInfo.Network);
+        return await swapsManagementService.InitiateSubmarineSwap(walletId, invoice);
+    }
+
+    // ── Chain Swap (Ark → BTC on-chain via Boltz) ──
+
+    public async Task<string> SendArkToBtcChainSwap(string walletId, long amountSats, string btcAddress)
+    {
+        var serverInfo = await transport.GetServerInfoAsync();
+        var addr = BitcoinAddress.Create(btcAddress, serverInfo.Network);
+        return await swapsManagementService.InitiateArkToBtcChainSwap(walletId, amountSats, addr);
+    }
+
+    // ── Network Config ──
+
+    public ArkNetworkConfig GetNetworkConfig() => networkConfig;
 
     // ── Helpers ──
 
