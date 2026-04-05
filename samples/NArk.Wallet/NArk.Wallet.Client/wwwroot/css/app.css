@@ -464,13 +464,21 @@ html, body, #app {
 /* ── QR Code Container ──────────────────── */
 .qr-container {
     background: white;
-    border-radius: 16px;
-    padding: 20px;
+    border-radius: 20px;
+    padding: 16px;
     display: flex;
     align-items: center;
     justify-content: center;
     margin: 0 auto;
-    width: fit-content;
+    width: 220px;
+    height: 220px;
+    box-shadow: 0 0 40px rgba(112, 67, 244, 0.15), 0 0 80px rgba(112, 67, 244, 0.05);
+}
+
+.qr-container svg {
+    width: 100%;
+    height: 100%;
+    border-radius: 4px;
 }
 
 /* ── Address Display ────────────────────── */

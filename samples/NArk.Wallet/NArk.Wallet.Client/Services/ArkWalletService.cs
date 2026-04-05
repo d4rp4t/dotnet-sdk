@@ -26,6 +26,7 @@ public class ArkWalletService(
     IClientTransport transport,
     ISpendingService spendingService,
     IVtxoStorage vtxoStorage,
+    IContractStorage contractStorage,
     ISwapStorage swapStorage,
     IAssetManager assetManager,
     SwapsManagementService swapsManagementService,
@@ -134,6 +135,12 @@ public class ArkWalletService(
         var wallets = await walletStorage.LoadAllWallets();
         return wallets.FirstOrDefault(w => w.Id == walletId);
     }
+
+    // ── Contracts ──
+
+    public async Task<IReadOnlyCollection<ArkContractEntity>> GetContracts(
+        string walletId, bool? isActive = null, int take = 50)
+        => await contractStorage.GetContracts(walletIds: [walletId], isActive: isActive, take: take);
 
     // ── Assets ──
 

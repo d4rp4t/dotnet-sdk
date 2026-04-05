@@ -1,6 +1,9 @@
 @page "/assets"
+@implements IDisposable
 @inject ArkWalletService Ark
 @inject WalletState State
+@inject IJSRuntime JS
+@using NArk.Wallet.Client.Services
 
 <div class="page-header">
     <a href="./" class="back-btn">
@@ -10,65 +13,129 @@
 </div>
 
 <div class="px-20">
-    <!-- Issue New Asset -->
-    <div class="glass-card mb-24">
-        <p style="font-size:15px;font-weight:600;margin-bottom:16px;">Issue New Asset</p>
-
-        <label class="input-label">Amount</label>
-        <input class="input-field mb-12" @bind="_issueAmount" type="number" placeholder="1000" />
-
-        <label class="input-label">Name (optional)</label>
-        <input class="input-field mb-12" @bind="_assetName" placeholder="My Token" />
-
-        <label class="input-label">Control Asset ID (optional)</label>
-        <input class="input-field mb-16" @bind="_controlAssetId" placeholder="Leave empty for new asset" style="font-size:12px;" />
-
-        <button class="btn btn-primary btn-full" @onclick="IssueAsset" disabled="@(_issuing || _issueAmount <= 0)">
-            @(_issuing ? "Issuing..." : "Issue Asset")
-        </button>
-
-        @if (_issueTxId is not null)
+    <!-- Import Asset by ID -->
+    <div class="glass-card mb-16">
+        <p style="font-size:14px;font-weight:600;margin-bottom:12px;">Track Asset</p>
+        <div style="display:flex;gap:8px;">
+            <input class="input-field" @bind="_importAssetId" placeholder="Paste asset ID"
+                   style="font-size:12px;font-family:var(--font-mono);flex:1;" />
+            <button class="btn btn-sm btn-secondary" style="flex-shrink:0;"
+                    disabled="@string.IsNullOrWhiteSpace(_importAssetId)"
+                    @onclick="ImportAsset">
+                Track
+            </button>
+        </div>
+        @if (_importSuccess)
         {
-            <div class="mt-12" style="padding:12px;background:rgba(96,177,138,0.1);border-radius:8px;">
-                <p class="text-green" style="font-size:13px;font-weight:600;">Asset Issued!</p>
-                <p class="mono text-secondary" style="font-size:11px;margin-top:4px;">ID: @_issueAssetId</p>
-                <p class="mono text-secondary" style="font-size:11px;">Tx: @_issueTxId</p>
-            </div>
-        }
-
-        @if (_issueError is not null)
-        {
-            <p style="color:var(--arkade-red);font-size:12px;margin-top:8px;">@_issueError</p>
+            <p class="text-green" style="font-size:11px;margin-top:6px;">Asset tracked! It will appear on the Receive page.</p>
         }
     </div>
 
-    <!-- Asset Portfolio -->
+    <!-- Issue New Asset -->
+    <div class="glass-card mb-24">
+        <p style="font-size:15px;font-weight:600;margin-bottom:12px;">Issue New Asset</p>
+
+        @if (!_hasVtxos)
+        {
+            <div style="padding:12px;background:rgba(230,155,57,0.1);border-radius:10px;">
+                <p class="text-orange" style="font-size:12px;font-weight:500;">No available coins</p>
+                <p class="text-secondary" style="font-size:11px;margin-top:4px;">
+                    You need VTXOs (sats) in your wallet before you can issue an asset. Receive some funds first.
+                </p>
+            </div>
+        }
+        else
+        {
+            <label class="input-label">Amount</label>
+            <input class="input-field mb-12" @bind="_issueAmount" type="number" placeholder="1000" />
+
+            <label class="input-label">Name (optional)</label>
+            <input class="input-field mb-12" @bind="_assetName" placeholder="My Token" />
+
+            <label class="input-label">Control Asset ID (optional)</label>
+            <input class="input-field mb-16" @bind="_controlAssetId" placeholder="Leave empty for new asset" style="font-size:12px;" />
+
+            <button class="btn btn-primary btn-full" @onclick="IssueAsset" disabled="@(_issuing || _issueAmount <= 0)">
+                @(_issuing ? "Issuing..." : "Issue Asset")
+            </button>
+
+            @if (_issueTxId is not null)
+            {
+                <div class="mt-12" style="padding:12px;background:rgba(96,177,138,0.1);border-radius:8px;">
+                    <p class="text-green" style="font-size:13px;font-weight:600;">Asset Issued!</p>
+                    <p class="mono text-secondary" style="font-size:11px;margin-top:4px;">ID: @_issueAssetId</p>
+                    <p class="mono text-secondary" style="font-size:11px;">Tx: @_issueTxId</p>
+                </div>
+            }
+
+            @if (_issueError is not null)
+            {
+                <p style="color:var(--arkade-red);font-size:12px;margin-top:8px;">@_issueError</p>
+            }
+        }
+    </div>
+
+    <!-- Asset Portfolio (from VTXOs) -->
     <div class="section-header" style="padding:0;">
         <span class="section-title">Portfolio</span>
     </div>
 
-    @if (_assets.Count == 0)
+    @if (_loadingPortfolio)
+    {
+        <div class="skeleton mt-12" style="height:60px;border-radius:14px;"></div>
+    }
+    else if (_portfolio.Count == 0)
     {
         <div class="empty-state">
             <div class="glass-card">
                 <p>No assets yet</p>
-                <p>Issue your first asset above</p>
+                <p class="text-secondary" style="font-size:12px;">Issue or receive assets to see them here</p>
             </div>
         </div>
     }
     else
     {
-        @foreach (var asset in _assets)
-        {
-            <div class="tx-item" style="padding:14px 0;">
-                <div class="tx-icon" style="background:rgba(112,67,244,0.15);color:var(--arkade-purple-light);">◆</div>
-                <div class="tx-details">
-                    <div class="tx-label">@(asset.Name ?? "Unknown Asset")</div>
-                    <div class="tx-meta mono">@asset.AssetId[..16]...</div>
+        <div class="flex-col gap-12 mt-12">
+            @foreach (var asset in _portfolio)
+            {
+                <div class="glass-card" style="padding:14px 16px;">
+                    <div style="display:flex;align-items:center;gap:12px;">
+                        <div style="width:36px;height:36px;border-radius:50%;background:rgba(112,67,244,0.15);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                            <span style="color:var(--arkade-purple-light);font-size:16px;">◆</span>
+                        </div>
+                        <div style="flex:1;min-width:0;">
+                            <p style="font-size:14px;font-weight:600;font-family:var(--font-mono);">
+                                @asset.TotalAmount.ToString("N0")
+                            </p>
+                            <p class="text-secondary" style="font-size:10px;font-family:var(--font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                                @asset.AssetId
+                            </p>
+                        </div>
+                        <span class="pill pill-info" style="font-size:9px;">@asset.VtxoCount VTXO@(asset.VtxoCount != 1 ? "s" : "")</span>
+                    </div>
                 </div>
-                <div class="tx-amount positive">@asset.Amount</div>
-            </div>
-        }
+            }
+        </div>
+    }
+
+    <!-- Tracked Asset IDs -->
+    @if (State.TrackedAssetIds.Count > 0)
+    {
+        <div class="section-header mt-24" style="padding:0;">
+            <span class="section-title">Tracked IDs</span>
+        </div>
+        <div class="flex-col gap-12 mt-12 mb-24">
+            @foreach (var id in State.TrackedAssetIds)
+            {
+                <div class="glass-card" style="padding:10px 14px;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;">
+                        <p class="mono text-secondary" style="font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">@id</p>
+                        <button class="btn btn-sm" style="padding:4px 8px;font-size:10px;color:var(--arkade-red);"
+                                @onclick="@(() => RemoveTrackedAsset(id))">✕</button>
+                    </div>
+                </div>
+            }
+        </div>
     }
 </div>
 
@@ -80,9 +147,75 @@
     private string? _issueTxId;
     private string? _issueAssetId;
     private string? _issueError;
+    private string? _importAssetId;
+    private bool _importSuccess;
+    private bool _hasVtxos;
+    private bool _loadingPortfolio = true;
 
-    private record IssuedAsset(string AssetId, string? Name, ulong Amount);
-    private List<IssuedAsset> _assets = new();
+    private record AssetPortfolioEntry(string AssetId, ulong TotalAmount, int VtxoCount);
+    private List<AssetPortfolioEntry> _portfolio = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        State.OnChange += OnStateChanged;
+
+        if (State.ActiveWalletId is not null)
+        {
+            await LoadData();
+        }
+        _loadingPortfolio = false;
+    }
+
+    private async Task LoadData()
+    {
+        if (State.ActiveWalletId is null) return;
+
+        try
+        {
+            var vtxos = await Ark.GetVtxos(State.ActiveWalletId, take: 200);
+            _hasVtxos = vtxos.Any(v => !v.IsSpent());
+
+            // Build portfolio from VTXO asset data
+            var assetMap = new Dictionary<string, (ulong Amount, int Count)>();
+            foreach (var vtxo in vtxos.Where(v => !v.IsSpent()))
+            {
+                if (vtxo.Assets is null) continue;
+                foreach (var asset in vtxo.Assets)
+                {
+                    if (assetMap.TryGetValue(asset.AssetId, out var existing))
+                        assetMap[asset.AssetId] = (existing.Amount + asset.Amount, existing.Count + 1);
+                    else
+                        assetMap[asset.AssetId] = (asset.Amount, 1);
+                }
+            }
+
+            _portfolio = assetMap
+                .Select(kv => new AssetPortfolioEntry(kv.Key, kv.Value.Amount, kv.Value.Count))
+                .OrderByDescending(a => a.TotalAmount)
+                .ToList();
+        }
+        catch { }
+    }
+
+    private void ImportAsset()
+    {
+        if (string.IsNullOrWhiteSpace(_importAssetId)) return;
+        State.TrackedAssetIds.Add(_importAssetId.Trim());
+        State.NotifyChanged();
+        _importSuccess = true;
+        _importAssetId = null;
+        _ = Task.Delay(3000).ContinueWith(_ =>
+        {
+            _importSuccess = false;
+            InvokeAsync(StateHasChanged);
+        });
+    }
+
+    private void RemoveTrackedAsset(string id)
+    {
+        State.TrackedAssetIds.Remove(id);
+        State.NotifyChanged();
+    }
 
     private async Task IssueAsset()
     {
@@ -106,9 +239,25 @@
 
             _issueTxId = txId;
             _issueAssetId = assetId;
-            _assets.Add(new IssuedAsset(assetId, _assetName, _issueAmount));
+
+            // Auto-track the newly issued asset
+            State.TrackedAssetIds.Add(assetId);
+
+            // Reload portfolio
+            await LoadData();
         }
         catch (Exception ex) { _issueError = ex.Message; }
         finally { _issuing = false; }
+    }
+
+    private async void OnStateChanged()
+    {
+        await LoadData();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        State.OnChange -= OnStateChanged;
     }
 }

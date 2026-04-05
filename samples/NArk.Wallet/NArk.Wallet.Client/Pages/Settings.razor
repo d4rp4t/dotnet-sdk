@@ -2,7 +2,10 @@
 @inject ArkWalletService Ark
 @inject WalletState State
 @inject IJSRuntime JS
+@inject NavigationManager Nav
 @using NArk.Wallet.Client.Services
+@using NArk.Abstractions.Contracts
+@using NArk.Abstractions.VTXOs
 
 <div class="page-header">
     <a href="./" class="back-btn">
@@ -27,51 +30,57 @@
     }
     else
     {
-        <!-- Wallet Info -->
+        <!-- Wallet -->
         <div class="section-header" style="padding:0;">
             <span class="section-title">Wallet</span>
         </div>
 
         <div class="glass-card mb-16 mt-12">
             <p class="input-label">Wallet ID</p>
-            <div class="address-display" style="margin-bottom:8px;" @onclick="@(() => CopyToClipboard(State.ActiveWalletId!))">
-                @State.ActiveWalletId
-            </div>
+            <div class="address-display" style="margin-bottom:8px;">@State.ActiveWalletId</div>
             <button class="btn btn-sm btn-secondary" @onclick="@(() => CopyToClipboard(State.ActiveWalletId!))">
                 @(_copiedField == "walletId" ? "Copied!" : "Copy")
             </button>
         </div>
 
-        @if (_arkAddress is not null)
-        {
-            <div class="glass-card mb-16">
-                <p class="input-label">Ark Address</p>
-                <div class="address-display" style="margin-bottom:8px;">@_arkAddress</div>
-                <div style="display:flex;gap:8px;">
-                    <button class="btn btn-sm btn-secondary" @onclick="@(() => CopyToClipboard(_arkAddress!, "ark"))">
-                        @(_copiedField == "ark" ? "Copied!" : "Copy")
-                    </button>
-                    <button class="btn btn-sm btn-secondary" @onclick="ToggleArkQr">
-                        @(_showArkQr ? "Hide QR" : "Show QR")
-                    </button>
+        <!-- Contracts -->
+        <div class="glass-card mb-16" @onclick="@(() => _showContracts = !_showContracts)" style="cursor:pointer;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div>
+                    <p style="font-size:14px;font-weight:600;">Tracked Contracts</p>
+                    <p class="text-secondary" style="font-size:12px;">
+                        @(_contracts?.Count ?? 0) contracts
+                    </p>
                 </div>
-                @if (_showArkQr)
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                     style="color:var(--text-tertiary);transform:rotate(@(_showContracts ? "90" : "0")deg);transition:transform 0.2s;">
+                    <path d="M9 18l6-6-6-6"/>
+                </svg>
+            </div>
+        </div>
+
+        @if (_showContracts && _contracts is not null)
+        {
+            <div class="flex-col gap-12 mb-16">
+                @foreach (var c in _contracts)
                 {
-                    <div class="qr-container mt-12" style="margin:12px auto 0;">
-                        @((MarkupString)QrCodeHelper.GenerateSvg(_arkAddress))
+                    <div class="glass-card" style="padding:10px 14px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <div style="min-width:0;flex:1;">
+                                <div style="display:flex;align-items:center;gap:6px;">
+                                    <span class="pill @ContractStatePill(c.ActivityState)" style="font-size:8px;">@c.ActivityState</span>
+                                    <span class="text-secondary" style="font-size:11px;">@c.Type</span>
+                                </div>
+                                <p class="text-secondary" style="font-size:10px;font-family:var(--font-mono);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                                    @c.Script[..Math.Min(40, c.Script.Length)]...
+                                </p>
+                            </div>
+                            <span class="text-secondary" style="font-size:10px;flex-shrink:0;margin-left:8px;">
+                                @c.CreatedAt.LocalDateTime.ToString("MMM d")
+                            </span>
+                        </div>
                     </div>
                 }
-            </div>
-        }
-
-        @if (_boardingAddress is not null)
-        {
-            <div class="glass-card mb-16">
-                <p class="input-label">Boarding Address</p>
-                <div class="address-display" style="margin-bottom:8px;">@_boardingAddress</div>
-                <button class="btn btn-sm btn-secondary" @onclick="@(() => CopyToClipboard(_boardingAddress!, "boarding"))">
-                    @(_copiedField == "boarding" ? "Copied!" : "Copy")
-                </button>
             </div>
         }
 
@@ -89,8 +98,8 @@
                 </div>
                 @if (_serverPubkey is not null)
                 {
-                    <div style="margin-bottom:8px;">
-                        <span class="text-secondary" style="font-size:13px;">Server Pubkey</span>
+                    <div>
+                        <span class="text-secondary" style="font-size:13px;">Server Key</span>
                         <div class="address-display" style="font-size:10px;margin-top:4px;">@_serverPubkey</div>
                     </div>
                 }
@@ -181,31 +190,30 @@
 
 @code {
     private bool _loading = true;
-    private string? _arkAddress;
-    private string? _boardingAddress;
     private string? _serverNetwork;
     private string? _serverPubkey;
     private IReadOnlyCollection<ArkVtxo>? _vtxos;
+    private IReadOnlyCollection<ArkContractEntity>? _contracts;
     private string? _copiedField;
-    private bool _showArkQr;
+    private bool _showContracts;
     private bool _confirmDelete;
 
     protected override async Task OnInitializedAsync()
     {
+        State.OnChange += StateHasChanged;
+
         if (State.ActiveWalletId is not null)
         {
             try
             {
-                var receiveTask = Ark.GetReceiveInfo(State.ActiveWalletId);
                 var vtxoTask = Ark.GetVtxos(State.ActiveWalletId, take: 100);
                 var serverTask = Ark.GetServerInfo();
+                var contractsTask = Ark.GetContracts(State.ActiveWalletId, take: 100);
 
-                await Task.WhenAll(receiveTask, vtxoTask, serverTask);
+                await Task.WhenAll(vtxoTask, serverTask, contractsTask);
 
-                var (ark, boarding) = receiveTask.Result;
-                _arkAddress = ark;
-                _boardingAddress = boarding;
                 _vtxos = vtxoTask.Result;
+                _contracts = contractsTask.Result;
 
                 var info = serverTask.Result;
                 _serverNetwork = info.Network?.Name ?? "Unknown";
@@ -225,8 +233,6 @@
         _copiedField = null;
     }
 
-    private void ToggleArkQr() => _showArkQr = !_showArkQr;
-
     private async Task DeleteWallet()
     {
         if (State.ActiveWalletId is not null)
@@ -235,5 +241,17 @@
             State.SetActiveWallet(null);
             _confirmDelete = false;
         }
+    }
+
+    private static string ContractStatePill(ContractActivityState state) => state switch
+    {
+        ContractActivityState.Active => "pill-success",
+        ContractActivityState.Inactive => "pill-danger",
+        _ => "pill-warning"
+    };
+
+    public void Dispose()
+    {
+        State.OnChange -= StateHasChanged;
     }
 }
