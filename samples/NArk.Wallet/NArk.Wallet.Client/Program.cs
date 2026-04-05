@@ -35,6 +35,15 @@ builder.Services.AddArkRestTransport(networkConfig);
 
 // ── NArk SDK swap services ──
 builder.Services.AddArkSwapServices();
+// In full ASP.NET hosts, AddHttpClient<BoltzClient>() provides the HttpClient. In WASM we must
+// register CachedBoltzClient (and its BoltzClient base) with a plain HttpClient ourselves.
+builder.Services.AddSingleton<NArk.Swaps.Boltz.Client.CachedBoltzClient>(sp =>
+{
+    var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<NArk.Swaps.Boltz.Models.BoltzClientOptions>>();
+    return new NArk.Swaps.Boltz.Client.CachedBoltzClient(new HttpClient(), opts);
+});
+builder.Services.AddSingleton<NArk.Swaps.Boltz.Client.BoltzClient>(sp =>
+    sp.GetRequiredService<NArk.Swaps.Boltz.Client.CachedBoltzClient>());
 
 // ── SDK infrastructure ──
 builder.Services.AddSingleton<IIntentScheduler, SimpleIntentScheduler>();

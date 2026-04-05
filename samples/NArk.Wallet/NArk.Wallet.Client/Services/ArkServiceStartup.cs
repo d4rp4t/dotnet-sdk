@@ -31,8 +31,13 @@ public static class ArkServiceStartup
         var vtxoSync = services.GetRequiredService<VtxoSynchronizationService>();
         await vtxoSync.StartAsync(cts.Token);
 
-        // Start swap management (monitors swap status, handles claims)
-        var swapMgr = services.GetRequiredService<SwapsManagementService>();
-        await swapMgr.StartAsync(cts.Token);
+        // Start swap management (monitors swap status, handles claims).
+        // Non-fatal if Boltz is unreachable — swaps just won't be monitored until next app load.
+        try
+        {
+            var swapMgr = services.GetRequiredService<SwapsManagementService>();
+            await swapMgr.StartAsync(cts.Token);
+        }
+        catch { /* Boltz unavailable — swap monitoring disabled */ }
     }
 }
