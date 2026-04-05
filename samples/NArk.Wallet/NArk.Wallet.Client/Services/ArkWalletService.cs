@@ -2,6 +2,7 @@ using BTCPayServer.Lightning;
 using NArk.Abstractions;
 using NArk.Abstractions.Assets;
 using NArk.Abstractions.Contracts;
+using NArk.Abstractions.Intents;
 using NArk.Abstractions.VTXOs;
 using NArk.Abstractions.Wallets;
 using NArk.Core;
@@ -29,8 +30,10 @@ public class ArkWalletService(
     IVtxoStorage vtxoStorage,
     IContractStorage contractStorage,
     ISwapStorage swapStorage,
+    IIntentStorage intentStorage,
     IAssetManager assetManager,
     IOnchainService onchainService,
+    IContractService contractService,
     SwapsManagementService swapsManagementService,
     BoltzLimitsValidator boltzLimitsValidator,
     ArkNetworkConfig networkConfig)
@@ -85,22 +88,19 @@ public class ArkWalletService(
 
     public async Task<ReceiveInfo> GetReceiveInfo(string walletId)
     {
-        var addressProvider = await walletProvider.GetAddressProviderAsync(walletId)
-            ?? throw new InvalidOperationException("Wallet not found");
-
         var serverInfo = await transport.GetServerInfoAsync();
 
-        var (contract, contractEntity) = await addressProvider.GetNextContract(
-            NextContractPurpose.Receive, ContractActivityState.Active);
-        var arkAddress = contract.GetArkAddress().ToString(serverInfo.Network == Network.Main);
+        // Use IContractService.DeriveContract to persist contracts (not raw addressProvider)
+        var arkContract = await contractService.DeriveContract(walletId, NextContractPurpose.Receive);
+        var arkAddress = arkContract.GetArkAddress().ToString(serverInfo.Network == Network.Main);
+        var arkScript = arkContract.GetScriptPubKey().ToHex();
 
-        var (boardingContract, boardingEntity) = await addressProvider.GetNextContract(
-            NextContractPurpose.Boarding, ContractActivityState.Active);
+        var boardingContract = await contractService.DeriveContract(walletId, NextContractPurpose.Boarding);
         var boardingAddress = boardingContract.GetScriptPubKey()
             .GetDestinationAddress(serverInfo.Network)?.ToString() ?? "";
+        var boardingScript = boardingContract.GetScriptPubKey().ToHex();
 
-        return new ReceiveInfo(arkAddress, boardingAddress,
-            contractEntity.Script, boardingEntity.Script);
+        return new ReceiveInfo(arkAddress, boardingAddress, arkScript, boardingScript);
     }
 
     // ── Swaps ──
@@ -143,6 +143,12 @@ public class ArkWalletService(
         var wallets = await walletStorage.LoadAllWallets();
         return wallets.FirstOrDefault(w => w.Id == walletId);
     }
+
+    // ── Intents ──
+
+    public async Task<IReadOnlyCollection<ArkIntent>> GetIntents(
+        string walletId, ArkIntentState[]? states = null, int take = 50)
+        => await intentStorage.GetIntents(walletIds: [walletId], states: states, take: take);
 
     // ── Contracts ──
 

@@ -1,0 +1,180 @@
+@page "/intents"
+@inject ArkWalletService Ark
+@inject WalletState State
+@inject IJSRuntime JS
+@using NArk.Wallet.Client.Services
+@using NArk.Abstractions.Intents
+
+<div class="page-header">
+    <a href="./settings" class="back-btn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    </a>
+    <span class="page-title">Intents</span>
+</div>
+
+<div class="px-20">
+    @if (_loading)
+    {
+        <div class="flex-col gap-12">
+            <div class="skeleton" style="height:68px;border-radius:14px;"></div>
+            <div class="skeleton" style="height:68px;border-radius:14px;"></div>
+        </div>
+    }
+    else if (_intents.Count == 0)
+    {
+        <div class="empty-state">
+            <p>No intents</p>
+            <p class="text-secondary" style="font-size:12px;">Intents are created when sending funds or participating in batch rounds</p>
+        </div>
+    }
+    else
+    {
+        <!-- Filter pills -->
+        <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap;">
+            <button class="pill @(_filter is null ? "pill-info" : "")" style="cursor:pointer;border:none;"
+                    @onclick="@(() => _filter = null)">All (@_intents.Count)</button>
+            @foreach (var state in _intents.Select(i => i.State).Distinct().OrderBy(s => s))
+            {
+                <button class="pill @(_filter == state.ToString() ? IntentStatePill(state) : "")" style="cursor:pointer;border:none;"
+                        @onclick="@(() => _filter = state.ToString())">@state (@_intents.Count(i => i.State == state))</button>
+            }
+        </div>
+
+        <div class="flex-col gap-12">
+            @foreach (var intent in FilteredIntents.OrderByDescending(i => i.UpdatedAt))
+            {
+                <div class="glass-card" style="padding:12px 14px;cursor:pointer;" @onclick="@(() => ToggleDetail(intent.IntentTxId))">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <div style="min-width:0;flex:1;">
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span class="pill @IntentStatePill(intent.State)" style="font-size:8px;">@intent.State</span>
+                            </div>
+                            <p class="mono text-secondary" style="font-size:10px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                                @intent.IntentTxId[..Math.Min(24, intent.IntentTxId.Length)]...
+                            </p>
+                        </div>
+                        <span class="text-secondary" style="font-size:10px;flex-shrink:0;margin-left:8px;">
+                            @intent.UpdatedAt.LocalDateTime.ToString("MMM d HH:mm")
+                        </span>
+                    </div>
+
+                    @if (_expandedTxId == intent.IntentTxId)
+                    {
+                        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-subtle);">
+                            <div class="detail-row">
+                                <span class="detail-label">Intent Tx ID</span>
+                                <div class="address-display" style="font-size:10px;margin-top:4px;">@intent.IntentTxId</div>
+                            </div>
+                            @if (intent.IntentId is not null)
+                            {
+                                <div class="detail-row">
+                                    <span class="detail-label">Intent ID</span>
+                                    <p class="mono text-secondary" style="font-size:10px;">@intent.IntentId</p>
+                                </div>
+                            }
+                            <div class="detail-row">
+                                <span class="detail-label">State</span>
+                                <span class="detail-value">@intent.State</span>
+                            </div>
+                            @if (intent.BatchId is not null)
+                            {
+                                <div class="detail-row">
+                                    <span class="detail-label">Batch ID</span>
+                                    <p class="mono text-secondary" style="font-size:10px;">@intent.BatchId</p>
+                                </div>
+                            }
+                            @if (intent.CommitmentTransactionId is not null)
+                            {
+                                <div class="detail-row">
+                                    <span class="detail-label">Commitment Tx</span>
+                                    <div class="address-display" style="font-size:9px;margin-top:4px;">@intent.CommitmentTransactionId</div>
+                                </div>
+                            }
+                            @if (intent.IntentVtxos is { Length: > 0 })
+                            {
+                                <div class="detail-row">
+                                    <span class="detail-label">Input VTXOs (@intent.IntentVtxos.Length)</span>
+                                    @foreach (var outpoint in intent.IntentVtxos)
+                                    {
+                                        <p class="mono text-secondary" style="font-size:9px;">@outpoint</p>
+                                    }
+                                </div>
+                            }
+                            @if (intent.ValidFrom is not null)
+                            {
+                                <div class="detail-row">
+                                    <span class="detail-label">Valid From</span>
+                                    <span class="detail-value">@intent.ValidFrom.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")</span>
+                                </div>
+                            }
+                            @if (intent.ValidUntil is not null)
+                            {
+                                <div class="detail-row">
+                                    <span class="detail-label">Valid Until</span>
+                                    <span class="detail-value">@intent.ValidUntil.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")</span>
+                                </div>
+                            }
+                            @if (intent.CancellationReason is not null)
+                            {
+                                <div class="detail-row">
+                                    <span class="detail-label" style="color:var(--arkade-red);">Cancellation Reason</span>
+                                    <p style="font-size:12px;color:var(--arkade-red);">@intent.CancellationReason</p>
+                                </div>
+                            }
+                            <div class="detail-row">
+                                <span class="detail-label">Created</span>
+                                <span class="detail-value">@intent.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")</span>
+                            </div>
+                            <button class="btn btn-sm btn-secondary mt-8" @onclick:stopPropagation="true"
+                                    @onclick="@(() => CopyTxId(intent.IntentTxId))">
+                                @(_copiedTxId == intent.IntentTxId ? "Copied!" : "Copy Intent Tx ID")
+                            </button>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private bool _loading = true;
+    private IReadOnlyCollection<ArkIntent> _intents = [];
+    private string? _expandedTxId;
+    private string? _copiedTxId;
+    private string? _filter;
+
+    private IEnumerable<ArkIntent> FilteredIntents => _filter is null
+        ? _intents
+        : _intents.Where(i => i.State.ToString() == _filter);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (State.ActiveWalletId is not null)
+        {
+            try { _intents = await Ark.GetIntents(State.ActiveWalletId, take: 200); } catch { }
+        }
+        _loading = false;
+    }
+
+    private void ToggleDetail(string txId)
+        => _expandedTxId = _expandedTxId == txId ? null : txId;
+
+    private async Task CopyTxId(string txId)
+    {
+        await JS.InvokeVoidAsync("arkade.copyToClipboard", txId);
+        _copiedTxId = txId;
+        StateHasChanged();
+        await Task.Delay(2000);
+        _copiedTxId = null;
+    }
+
+    private static string IntentStatePill(ArkIntentState state) => state switch
+    {
+        ArkIntentState.WaitingToSubmit => "pill-warning",
+        ArkIntentState.WaitingForBatch => "pill-info",
+        ArkIntentState.BatchSucceeded => "pill-success",
+        ArkIntentState.Cancelled => "pill-danger",
+        _ => "pill-info"
+    };
+}

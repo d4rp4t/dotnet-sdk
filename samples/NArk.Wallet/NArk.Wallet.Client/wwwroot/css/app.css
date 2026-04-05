@@ -881,6 +881,26 @@ html, body, #app {
     color: var(--text-tertiary);
 }
 
+/* ── Detail Row (List Pages) ──────────────── */
+.detail-row {
+    margin-bottom: 10px;
+}
+
+.detail-label {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+    display: block;
+    margin-bottom: 2px;
+}
+
+.detail-value {
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
 .amount-input-row .unit {
     font-size: 14px;
     color: var(--text-secondary);

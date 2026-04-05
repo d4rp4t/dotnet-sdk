@@ -1,4 +1,5 @@
 @page "/settings"
+@implements IDisposable
 @inject ArkWalletService Ark
 @inject WalletState State
 @inject IJSRuntime JS
@@ -44,46 +45,41 @@
             </button>
         </div>
 
-        <!-- Contracts -->
-        <div class="glass-card mb-16" @onclick="@(() => _showContracts = !_showContracts)" style="cursor:pointer;">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div>
-                    <p style="font-size:14px;font-weight:600;">Tracked Contracts</p>
-                    <p class="text-secondary" style="font-size:12px;">
-                        @(_contracts?.Count ?? 0) contracts
-                    </p>
-                </div>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                     style="color:var(--text-tertiary);transform:rotate(@(_showContracts ? "90" : "0")deg);transition:transform 0.2s;">
-                    <path d="M9 18l6-6-6-6"/>
-                </svg>
-            </div>
+        <!-- Data Pages -->
+        <div class="section-header mt-24" style="padding:0;">
+            <span class="section-title">Data</span>
         </div>
 
-        @if (_showContracts && _contracts is not null)
-        {
-            <div class="flex-col gap-12 mb-16">
-                @foreach (var c in _contracts)
-                {
-                    <div class="glass-card" style="padding:10px 14px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;">
-                            <div style="min-width:0;flex:1;">
-                                <div style="display:flex;align-items:center;gap:6px;">
-                                    <span class="pill @ContractStatePill(c.ActivityState)" style="font-size:8px;">@c.ActivityState</span>
-                                    <span class="text-secondary" style="font-size:11px;">@c.Type</span>
-                                </div>
-                                <p class="text-secondary" style="font-size:10px;font-family:var(--font-mono);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                                    @c.Script[..Math.Min(40, c.Script.Length)]...
-                                </p>
-                            </div>
-                            <span class="text-secondary" style="font-size:10px;flex-shrink:0;margin-left:8px;">
-                                @c.CreatedAt.LocalDateTime.ToString("MMM d")
-                            </span>
-                        </div>
-                    </div>
-                }
-            </div>
-        }
+        <div class="flex-col gap-12 mt-12">
+            <a href="./contracts" class="glass-card" style="display:flex;align-items:center;justify-content:space-between;text-decoration:none;color:inherit;padding:14px 16px;">
+                <div>
+                    <p style="font-size:14px;font-weight:600;">Contracts</p>
+                    <p class="text-secondary" style="font-size:12px;">@(_contractCount) tracked contracts</p>
+                </div>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-tertiary);flex-shrink:0;"><path d="M9 18l6-6-6-6"/></svg>
+            </a>
+            <a href="./vtxos" class="glass-card" style="display:flex;align-items:center;justify-content:space-between;text-decoration:none;color:inherit;padding:14px 16px;">
+                <div>
+                    <p style="font-size:14px;font-weight:600;">VTXOs</p>
+                    <p class="text-secondary" style="font-size:12px;">@(_vtxoCount) coins · @(_liveBalance.ToString("N0")) sats live</p>
+                </div>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-tertiary);flex-shrink:0;"><path d="M9 18l6-6-6-6"/></svg>
+            </a>
+            <a href="./swaps" class="glass-card" style="display:flex;align-items:center;justify-content:space-between;text-decoration:none;color:inherit;padding:14px 16px;">
+                <div>
+                    <p style="font-size:14px;font-weight:600;">Swaps</p>
+                    <p class="text-secondary" style="font-size:12px;">@(_swapCount) swaps</p>
+                </div>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-tertiary);flex-shrink:0;"><path d="M9 18l6-6-6-6"/></svg>
+            </a>
+            <a href="./intents" class="glass-card" style="display:flex;align-items:center;justify-content:space-between;text-decoration:none;color:inherit;padding:14px 16px;">
+                <div>
+                    <p style="font-size:14px;font-weight:600;">Intents</p>
+                    <p class="text-secondary" style="font-size:12px;">@(_intentCount) intents</p>
+                </div>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-tertiary);flex-shrink:0;"><path d="M9 18l6-6-6-6"/></svg>
+            </a>
+        </div>
 
         <!-- Server Info -->
         @if (_serverNetwork is not null)
@@ -116,57 +112,6 @@
                     <div>
                         <span class="text-secondary" style="font-size:13px;">Server Key</span>
                         <div class="address-display" style="font-size:10px;margin-top:4px;">@_serverPubkey</div>
-                    </div>
-                }
-            </div>
-        }
-
-        <!-- Coins (VTXOs) -->
-        <div class="section-header mt-24" style="padding:0;">
-            <span class="section-title">Coins (VTXOs)</span>
-            @if (_vtxos is not null)
-            {
-                <span class="text-secondary" style="font-size:12px;">@_vtxos.Count total</span>
-            }
-        </div>
-
-        @if (_vtxos is null)
-        {
-            <div class="skeleton mt-12" style="height:60px;"></div>
-        }
-        else if (_vtxos.Count == 0)
-        {
-            <div class="empty-state">
-                <div class="glass-card">
-                    <p>No coins yet</p>
-                </div>
-            </div>
-        }
-        else
-        {
-            <div class="flex-col gap-12 mt-12">
-                @foreach (var vtxo in _vtxos)
-                {
-                    <div class="glass-card" style="padding:12px 14px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;">
-                            <div>
-                                <p style="font-size:14px;font-weight:600;font-family:var(--font-mono);">
-                                    @vtxo.Amount.ToString("N0") <span class="text-secondary" style="font-weight:400;font-size:12px;">sats</span>
-                                </p>
-                                <p class="text-secondary" style="font-size:11px;font-family:var(--font-mono);">
-                                    @vtxo.TransactionId[..16]...
-                                </p>
-                            </div>
-                            <span class="pill @(vtxo.IsSpent() ? "pill-danger" : "pill-success")" style="font-size:9px;">
-                                @(vtxo.IsSpent() ? "SPENT" : "LIVE")
-                            </span>
-                        </div>
-                        @if (vtxo.ExpiresAt is not null)
-                        {
-                            <p class="text-secondary" style="font-size:11px;margin-top:4px;">
-                                Expires: @vtxo.ExpiresAt.Value.LocalDateTime.ToString("MMM d, HH:mm")
-                            </p>
-                        }
                     </div>
                 }
             </div>
@@ -218,10 +163,12 @@
     private string? _serverNetwork;
     private string? _serverPubkey;
     private ArkNetworkConfig? _networkConfig;
-    private IReadOnlyCollection<ArkVtxo>? _vtxos;
-    private IReadOnlyCollection<ArkContractEntity>? _contracts;
+    private int _contractCount;
+    private int _vtxoCount;
+    private long _liveBalance;
+    private int _swapCount;
+    private int _intentCount;
     private string? _copiedField;
-    private bool _showContracts;
     private bool _confirmDelete;
 
     protected override async Task OnInitializedAsync()
@@ -232,14 +179,20 @@
         {
             try
             {
-                var vtxoTask = Ark.GetVtxos(State.ActiveWalletId, take: 100);
+                var vtxoTask = Ark.GetVtxos(State.ActiveWalletId, take: 500);
                 var serverTask = Ark.GetServerInfo();
-                var contractsTask = Ark.GetContracts(State.ActiveWalletId, take: 100);
+                var contractsTask = Ark.GetContracts(State.ActiveWalletId, take: 500);
+                var swapsTask = Ark.GetSwaps(State.ActiveWalletId);
+                var intentsTask = Ark.GetIntents(State.ActiveWalletId, take: 500);
 
-                await Task.WhenAll(vtxoTask, serverTask, contractsTask);
+                await Task.WhenAll(vtxoTask, serverTask, contractsTask, swapsTask, intentsTask);
 
-                _vtxos = vtxoTask.Result;
-                _contracts = contractsTask.Result;
+                var vtxos = vtxoTask.Result;
+                _vtxoCount = vtxos.Count;
+                _liveBalance = (long)vtxos.Where(v => !v.IsSpent()).Aggregate(0UL, (sum, v) => sum + v.Amount);
+                _contractCount = contractsTask.Result.Count;
+                _swapCount = swapsTask.Result.Count;
+                _intentCount = intentsTask.Result.Count;
 
                 var info = serverTask.Result;
                 _serverNetwork = info.Network?.Name ?? "Unknown";
@@ -269,13 +222,6 @@
             _confirmDelete = false;
         }
     }
-
-    private static string ContractStatePill(ContractActivityState state) => state switch
-    {
-        ContractActivityState.Active => "pill-success",
-        ContractActivityState.Inactive => "pill-danger",
-        _ => "pill-warning"
-    };
 
     public void Dispose()
     {
