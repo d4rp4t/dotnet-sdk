@@ -475,6 +475,92 @@ services.AddArkEfCoreStorage<MyDbContext>(opts =>
 | `ArkIntentEntity` | `Intents` | `IntentTxId` |
 | `ArkIntentVtxoEntity` | `IntentVtxos` | `(IntentTxId, VtxoTransactionId, VtxoTransactionOutputIndex)` |
 | `ArkSwapEntity` | `Swaps` | `(SwapId, WalletId)` |
+| `ArkPaymentEntity` | `Payments` | `PaymentId` |
+| `ArkPaymentRequestEntity` | `PaymentRequests` | `RequestId` |
+
+## Payment Repository
+
+The SDK includes a payment repository for tracking end-to-end payments — both outbound (sends) and inbound (payment requests). This replaces the need for consumers to build their own payment-to-protocol linkage.
+
+### Outbound Payments (`ArkPayment`)
+
+Track a payment you're sending, linked to the protocol object that proves it:
+
+```csharp
+var payment = new ArkPayment(
+    PaymentId: Guid.NewGuid().ToString(),
+    WalletId: walletId,
+    Recipient: "tark1q...",
+    Amount: 50_000,
+    Method: ArkPaymentMethod.ArkSend,
+    Status: ArkPaymentStatus.Pending,
+    FailReason: null,
+    CreatedAt: DateTimeOffset.UtcNow,
+    CompletedAt: null)
+{
+    IntentTxId = intentTxId // links to the Ark intent
+};
+
+await paymentStorage.SavePayment(payment);
+
+// Query payments
+var pending = await paymentStorage.GetPayments(
+    walletIds: [walletId],
+    statuses: [ArkPaymentStatus.Pending]);
+```
+
+Payment methods: `ArkSend`, `CollaborativeExit`, `SubmarineSwap`, `ChainSwap`.
+Proof fields: `IntentTxId` (Ark sends), `SwapId` (swaps), `OnchainTxId` (collab exits).
+
+### Inbound Payment Requests (`ArkPaymentRequest`)
+
+Generate a payment request with multiple payment options:
+
+```csharp
+var request = new ArkPaymentRequest(
+    RequestId: Guid.NewGuid().ToString(),
+    WalletId: walletId,
+    Amount: 100_000,             // null = any amount (donation-style)
+    Description: "Order #1234",
+    Status: ArkPaymentRequestStatus.Pending,
+    ReceivedAmount: 0,
+    CreatedAt: DateTimeOffset.UtcNow,
+    ExpiresAt: DateTimeOffset.UtcNow.AddHours(1))
+{
+    ArkAddress = "tark1q...",
+    BoardingAddress = "bcrt1p...",
+    LightningInvoice = "lnbcrt...",
+    ContractScripts = [arkScript, boardingScript], // scripts to watch
+    SwapId = reverseSwapId                          // if Lightning enabled
+};
+
+await paymentRequestStorage.SavePaymentRequest(request);
+
+// Look up by script (for matching incoming VTXOs)
+var matched = await paymentRequestStorage.GetPaymentRequestByScript(vtxoScript);
+```
+
+### Automatic Status Tracking (`PaymentTrackingService`)
+
+The `PaymentTrackingService` subscribes to `VtxosChanged`, `IntentChanged`, and `SwapsChanged` events and automatically updates payment statuses:
+
+- **Outbound**: When an intent succeeds/fails or a swap settles/fails, the linked `ArkPayment` moves to `Completed` or `Failed`.
+- **Inbound**: When a VTXO arrives on a watched contract script, the `ArkPaymentRequest` accumulates `ReceivedAmount` and transitions to `Paid` (or `PartiallyPaid` for fixed-amount requests). Overpayment is tracked in the `Overpayment` property.
+
+Register it as a singleton:
+
+```csharp
+services.AddSingleton<PaymentTrackingService>();
+```
+
+It is registered automatically by `AddArkEfCoreStorage`, but must be resolved (e.g., via `IServiceProvider.GetRequiredService<PaymentTrackingService>()`) to activate event subscriptions.
+
+### Fulfillment Rules
+
+- **Any-amount requests** (`Amount = null`): `Paid` immediately on first funds received.
+- **Fixed-amount requests**: `Paid` when `ReceivedAmount >= Amount`. No underpayment tolerance.
+- **Overpayment**: Tracked via `ArkPaymentRequest.Overpayment` (sats above the target). Status is still `Paid`.
+- **Expiration**: Handled externally (timer/cron), not by the tracking service.
 
 ## Networks
 
@@ -523,6 +609,8 @@ The SDK uses a pluggable architecture. Register your implementations for:
 | `IIntentStorage` | Intent persistence | `EfCoreIntentStorage` |
 | `ISwapStorage` | Swap persistence | `EfCoreSwapStorage` |
 | `IWalletStorage` | Wallet persistence | `EfCoreWalletStorage` |
+| `IPaymentStorage` | Outbound payment persistence | `EfCorePaymentStorage` |
+| `IPaymentRequestStorage` | Inbound payment request persistence | `EfCorePaymentRequestStorage` |
 | `IWalletProvider` | Wallet signer/address resolution | `DefaultWalletProvider` |
 | `ISafetyService` | Distributed locking | *Must implement* |
 | `IChainTimeProvider` | Current blockchain height/time | *Must implement* |

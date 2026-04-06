@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Intents;
+using NArk.Abstractions.Payments;
 using NArk.Abstractions.Scripts;
 using NArk.Abstractions.VTXOs;
 using NArk.Abstractions.Wallets;
@@ -46,6 +47,12 @@ public static class StorageServiceCollectionExtensions
 
         services.AddSingleton<EfCoreWalletStorage>();
         services.AddSingleton<IWalletStorage>(sp => sp.GetRequiredService<EfCoreWalletStorage>());
+
+        services.AddSingleton<EfCorePaymentStorage>();
+        services.AddSingleton<IPaymentStorage>(sp => sp.GetRequiredService<EfCorePaymentStorage>());
+
+        services.AddSingleton<EfCorePaymentRequestStorage>();
+        services.AddSingleton<IPaymentRequestStorage>(sp => sp.GetRequiredService<EfCorePaymentRequestStorage>());
 
         return services;
     }
