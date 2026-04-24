@@ -201,47 +201,41 @@ public class VtxoSynchronizationService : IAsyncDisposable
     /// On-demand polling for specific scripts. Use this to poll inactive contract scripts
     /// or any other scripts that aren't actively tracked.
     /// </summary>
-    public async Task<int> PollScriptsForVtxos(IReadOnlySet<string> scripts, CancellationToken cancellationToken = default)
+    public Task<int> PollScriptsForVtxos(IReadOnlySet<string> scripts, CancellationToken cancellationToken = default)
+        => PollScriptsForVtxos(scripts, after: null, cancellationToken);
+
+    /// <summary>
+    /// On-demand polling for specific scripts, optionally restricted to VTXOs updated
+    /// after the given timestamp. Use an <paramref name="after"/> value with a small
+    /// buffer (e.g. <c>UtcNow - 5 minutes</c>) for post-operation catch-up to avoid
+    /// re-fetching the full VTXO history of scripts that already have many entries.
+    /// </summary>
+    /// <param name="scripts">Contract scripts to poll.</param>
+    /// <param name="after">Optional lower bound on VTXO last-update timestamp. <c>null</c> returns everything.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Number of VTXOs returned by arkd (pre-upsert).</returns>
+    public async Task<int> PollScriptsForVtxos(IReadOnlySet<string> scripts, DateTimeOffset? after, CancellationToken cancellationToken = default)
     {
         if (scripts.Count == 0)
             return 0;
 
-        // TODO: remove once arkd fixes multi-script query (https://github.com/arkade-os/arkd/pull/943)
-        const bool pollOneByOne = false;
+        _logger?.LogInformation("PollScriptsForVtxos: querying arkd indexer for {Count} scripts (after={After}): [{Scripts}]",
+            scripts.Count, after?.ToString("O") ?? "<none>", string.Join(", ", scripts));
 
-        _logger?.LogInformation("PollScriptsForVtxos: querying arkd indexer for {Count} scripts (oneByOne={OneByOne}): [{Scripts}]",
-            scripts.Count, pollOneByOne, string.Join(", ", scripts));
-
-        // Log equivalent REST API URL for manual testing (substitute your arkd host:port)
+        // Log equivalent REST API URL for manual testing (substitute your arkd host:port).
         var queryParams = string.Join("&", scripts.Select(s => $"scripts={Uri.EscapeDataString(s)}"));
+        if (after.HasValue)
+            queryParams += $"&after={after.Value.ToUnixTimeMilliseconds()}";
         _logger?.LogInformation("PollScriptsForVtxos: curl http://localhost:7070/v1/indexer/vtxos?{QueryParams}", queryParams);
 
         var count = 0;
 
-        if (pollOneByOne)
+        await foreach (var vtxo in _arkClientTransport.GetVtxoByScriptsAsSnapshot(scripts, after, before: null, cancellationToken))
         {
-            foreach (var script in scripts)
-            {
-                var singleSet = new HashSet<string> { script } as IReadOnlySet<string>;
-                _logger?.LogInformation("PollScriptsForVtxos: polling single script {Script}", script);
-                await foreach (var vtxo in _arkClientTransport.GetVtxoByScriptsAsSnapshot(singleSet, cancellationToken))
-                {
-                    count++;
-                    _logger?.LogInformation("PollScriptsForVtxos: got VTXO {Outpoint} script={Script} spent={IsSpent}",
-                        vtxo.OutPoint, vtxo.Script, vtxo.SpentByTransactionId != null);
-                    await _vtxoStorage.UpsertVtxo(vtxo, cancellationToken);
-                }
-            }
-        }
-        else
-        {
-            await foreach (var vtxo in _arkClientTransport.GetVtxoByScriptsAsSnapshot(scripts, cancellationToken))
-            {
-                count++;
-                _logger?.LogInformation("PollScriptsForVtxos: got VTXO {Outpoint} script={Script} spent={IsSpent}",
-                    vtxo.OutPoint, vtxo.Script, vtxo.SpentByTransactionId != null);
-                await _vtxoStorage.UpsertVtxo(vtxo, cancellationToken);
-            }
+            count++;
+            _logger?.LogInformation("PollScriptsForVtxos: got VTXO {Outpoint} script={Script} spent={IsSpent}",
+                vtxo.OutPoint, vtxo.Script, vtxo.SpentByTransactionId != null);
+            await _vtxoStorage.UpsertVtxo(vtxo, cancellationToken);
         }
 
         _logger?.LogInformation("PollScriptsForVtxos: done, {Count} VTXOs returned from arkd", count);
