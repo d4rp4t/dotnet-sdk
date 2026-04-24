@@ -211,18 +211,21 @@ public class VtxoSynchronizationService : IAsyncDisposable
         // service is recycled.
         await foreach (var pollBatch in _readyToPoll.Reader.ReadAllAsync(cancellationToken))
         {
+            var started = DateTimeOffset.UtcNow;
             try
             {
-                _logger?.LogDebug("StartQueryLogic: polling {Count} script(s)", pollBatch.Count);
+                _logger?.LogInformation(
+                    "StartQueryLogic: polling {Count} script(s): [{Scripts}]",
+                    pollBatch.Count, string.Join(", ", pollBatch));
                 var found = 0;
                 await foreach (var vtxo in _arkClientTransport.GetVtxoByScriptsAsSnapshot(pollBatch, cancellationToken))
                 {
                     found++;
                     await _vtxoStorage.UpsertVtxo(vtxo, cancellationToken);
                 }
-                _logger?.LogDebug(
-                    "StartQueryLogic: poll returned {Found} VTXO(s) across {Count} script(s)",
-                    found, pollBatch.Count);
+                _logger?.LogInformation(
+                    "StartQueryLogic: poll returned {Found} VTXO(s) across {Count} script(s) in {Elapsed}ms",
+                    found, pollBatch.Count, (int)(DateTimeOffset.UtcNow - started).TotalMilliseconds);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -231,8 +234,8 @@ public class VtxoSynchronizationService : IAsyncDisposable
             catch (Exception ex)
             {
                 _logger?.LogWarning(0, ex,
-                    "StartQueryLogic: poll failed for {Count} script(s); continuing loop",
-                    pollBatch.Count);
+                    "StartQueryLogic: poll failed for {Count} script(s) after {Elapsed}ms; continuing loop",
+                    pollBatch.Count, (int)(DateTimeOffset.UtcNow - started).TotalMilliseconds);
             }
         }
     }
