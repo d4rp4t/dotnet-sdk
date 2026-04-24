@@ -62,7 +62,14 @@ public class EfCoreVtxoStorage : IVtxoStorage
         if (await db.SaveChangesAsync(cancellationToken) > 0)
         {
             VtxosChanged?.Invoke(this, vtxo);
-            ActiveScriptsChanged?.Invoke(this, EventArgs.Empty);
+            // Intentionally NOT firing ActiveScriptsChanged here. VTXOs only ever arrive
+            // on scripts we already know about (we poll scripts of known contracts), so
+            // an upsert cannot introduce a new script. Firing this event per-upsert
+            // caused VtxoSynchronizationService.UpdateScriptsView to re-run GetActiveScripts
+            // on every provider — and the default IVtxoStorage.GetActiveScripts scans all
+            // unspent VTXOs. That turns a 11k-VTXO import into ~121M row reads.
+            // Contract additions/removals still fire ActiveScriptsChanged via IContractStorage,
+            // which is where the view-of-scripts actually changes.
         }
 
         return isNew;
