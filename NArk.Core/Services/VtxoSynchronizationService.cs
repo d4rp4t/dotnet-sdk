@@ -207,7 +207,7 @@ public class VtxoSynchronizationService : IAsyncDisposable
             return 0;
 
         // TODO: remove once arkd fixes multi-script query (https://github.com/arkade-os/arkd/pull/943)
-        const bool pollOneByOne = true;
+        const bool pollOneByOne = false;
 
         _logger?.LogInformation("PollScriptsForVtxos: querying arkd indexer for {Count} scripts (oneByOne={OneByOne}): [{Scripts}]",
             scripts.Count, pollOneByOne, string.Join(", ", scripts));
