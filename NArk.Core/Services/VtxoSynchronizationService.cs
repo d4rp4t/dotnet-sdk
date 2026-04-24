@@ -25,8 +25,14 @@ public class VtxoSynchronizationService : IAsyncDisposable
 
     private readonly SemaphoreSlim _viewSyncLock = new(1);
 
-    private readonly Channel<HashSet<string>> _readyToPoll =
-        Channel.CreateBounded<HashSet<string>>(new BoundedChannelOptions(5));
+    // Stream-triggered polls only need changes within a short recent window.
+    // UpdateScriptsView full-syncs newly-added scripts with After=null.
+    private static readonly TimeSpan StreamPollLookback = TimeSpan.FromMinutes(5);
+
+    private readonly record struct PollRequest(HashSet<string> Scripts, DateTimeOffset? After);
+
+    private readonly Channel<PollRequest> _readyToPoll =
+        Channel.CreateBounded<PollRequest>(new BoundedChannelOptions(5));
 
     private readonly IVtxoStorage _vtxoStorage;
     private readonly IClientTransport _arkClientTransport;
@@ -108,12 +114,59 @@ public class VtxoSynchronizationService : IAsyncDisposable
         }
     }
 
+    // Safety-net periodic poll. arkd's script subscription has been observed to
+    // silently miss VTXO events for scripts that were added to the subscription
+    // after the stream opened — the invoice stays pending until a human clicks
+    // "sync". This timer re-queries all active scripts at a short `after`
+    // window so any miss is caught within the next tick.
+    private static readonly TimeSpan RoutinePollInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan RoutinePollLookback = TimeSpan.FromMinutes(2);
+    private Task? _routinePollTask;
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         _logger?.LogInformation("Starting VTXO synchronization service");
         var multiToken = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
         _queryTask = StartQueryLogic(multiToken.Token);
+        _routinePollTask = RoutinePoll(multiToken.Token);
         await UpdateScriptsView(multiToken.Token);
+    }
+
+    private async Task RoutinePoll(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(RoutinePollInterval, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            try
+            {
+                var scripts = _lastViewOfScripts;
+                if (scripts.Count == 0)
+                    continue;
+
+                var after = DateTimeOffset.UtcNow - RoutinePollLookback;
+                _logger?.LogDebug(
+                    "RoutinePoll: re-polling {Count} active script(s) with after={After}",
+                    scripts.Count, after.ToString("O"));
+                await _readyToPoll.Writer.WriteAsync(
+                    new PollRequest(scripts, after), cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "RoutinePoll: failed to enqueue safety-net poll; continuing");
+            }
+        }
     }
 
     private async Task UpdateScriptsView(CancellationToken token)
@@ -133,9 +186,10 @@ public class VtxoSynchronizationService : IAsyncDisposable
                 return;
             }
 
+            var newlyAdded = newViewOfScripts.Except(_lastViewOfScripts).ToHashSet();
             _logger?.LogInformation("UpdateScriptsView: script set changed from {OldCount} to {NewCount} scripts, restarting stream. New scripts: [{NewScripts}]",
                 _lastViewOfScripts.Count, newViewOfScripts.Count,
-                string.Join(", ", newViewOfScripts.Except(_lastViewOfScripts)));
+                string.Join(", ", newlyAdded));
 
             try
             {
@@ -151,10 +205,15 @@ public class VtxoSynchronizationService : IAsyncDisposable
 
             _lastViewOfScripts = newViewOfScripts;
             _restartCts = CancellationTokenSource.CreateLinkedTokenSource(token, _shutdownCts.Token);
-            // Start a new subscription stream
+            // Start a new subscription stream for the whole view.
             _streamTask = StartStreamLogic(newViewOfScripts, _restartCts.Token);
-            // Do an initial poll of all scripts
-            await _readyToPoll.Writer.WriteAsync(newViewOfScripts, token);
+            // Catch-up poll: only newly-added scripts need a full-history fetch
+            // (already-known scripts have been synced and will receive stream
+            // events for future changes). Skip when the set only shrank.
+            if (newlyAdded.Count > 0)
+            {
+                await _readyToPoll.Writer.WriteAsync(new PollRequest(newlyAdded, After: null), token);
+            }
         }
         finally
         {
@@ -176,7 +235,11 @@ public class VtxoSynchronizationService : IAsyncDisposable
                 _logger?.LogInformation(
                     "VTXO subscription stream: arkd pushed update for {Count} script(s): [{Scripts}]",
                     vtxosToPoll.Count, string.Join(", ", vtxosToPoll));
-                await _readyToPoll.Writer.WriteAsync(vtxosToPoll, restartableToken.Token);
+                // arkd just pushed an event — the change by definition happened very
+                // recently, so a short time-window avoids re-fetching the full
+                // historical VTXO set on every push.
+                var after = DateTimeOffset.UtcNow - StreamPollLookback;
+                await _readyToPoll.Writer.WriteAsync(new PollRequest(vtxosToPoll, after), restartableToken.Token);
             }
             endedGracefully = true;
         }
@@ -209,23 +272,26 @@ public class VtxoSynchronizationService : IAsyncDisposable
         // otherwise every subsequent stream event writes to _readyToPoll and
         // nothing reads — VTXO detection goes permanently silent until the
         // service is recycled.
-        await foreach (var pollBatch in _readyToPoll.Reader.ReadAllAsync(cancellationToken))
+        await foreach (var request in _readyToPoll.Reader.ReadAllAsync(cancellationToken))
         {
             var started = DateTimeOffset.UtcNow;
             try
             {
                 _logger?.LogInformation(
-                    "StartQueryLogic: polling {Count} script(s): [{Scripts}]",
-                    pollBatch.Count, string.Join(", ", pollBatch));
+                    "StartQueryLogic: polling {Count} script(s) (after={After}): [{Scripts}]",
+                    request.Scripts.Count,
+                    request.After?.ToString("O") ?? "<none>",
+                    string.Join(", ", request.Scripts));
                 var found = 0;
-                await foreach (var vtxo in _arkClientTransport.GetVtxoByScriptsAsSnapshot(pollBatch, cancellationToken))
+                await foreach (var vtxo in _arkClientTransport.GetVtxoByScriptsAsSnapshot(
+                                   request.Scripts, request.After, before: null, cancellationToken))
                 {
                     found++;
                     await _vtxoStorage.UpsertVtxo(vtxo, cancellationToken);
                 }
                 _logger?.LogInformation(
                     "StartQueryLogic: poll returned {Found} VTXO(s) across {Count} script(s) in {Elapsed}ms",
-                    found, pollBatch.Count, (int)(DateTimeOffset.UtcNow - started).TotalMilliseconds);
+                    found, request.Scripts.Count, (int)(DateTimeOffset.UtcNow - started).TotalMilliseconds);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -235,7 +301,7 @@ public class VtxoSynchronizationService : IAsyncDisposable
             {
                 _logger?.LogWarning(0, ex,
                     "StartQueryLogic: poll failed for {Count} script(s) after {Elapsed}ms; continuing loop",
-                    pollBatch.Count, (int)(DateTimeOffset.UtcNow - started).TotalMilliseconds);
+                    request.Scripts.Count, (int)(DateTimeOffset.UtcNow - started).TotalMilliseconds);
             }
         }
     }
@@ -313,6 +379,15 @@ public class VtxoSynchronizationService : IAsyncDisposable
         catch (OperationCanceledException)
         {
             _logger?.LogDebug("Stream task cancelled during disposal");
+        }
+        try
+        {
+            if (_routinePollTask is not null)
+                await _routinePollTask;
+        }
+        catch (OperationCanceledException)
+        {
+            _logger?.LogDebug("Routine poll task cancelled during disposal");
         }
 
         _logger?.LogInformation("VTXO synchronization service disposed");
