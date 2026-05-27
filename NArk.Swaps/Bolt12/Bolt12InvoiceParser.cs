@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+
 namespace NArk.Swaps.Bolt12;
 
 /// <summary>
@@ -10,11 +12,11 @@ namespace NArk.Swaps.Bolt12;
 /// (bech32) or Taproot (bech32m), there are no checksum bytes appended. See
 /// https://github.com/lightning/bolts/blob/master/12-offer-encoding.md §3.
 ///
-/// <b>Verification:</b> <see cref="VerifyInvoiceMatchesOffer"/> checks that
-/// <c>invoice_node_id</c> (TLV 176) equals <c>offer_issuer_id</c> (TLV 22), as required
-/// by the BOLT 12 spec. This covers offers with an explicit issuer key. Offers that
-/// expose only blinded paths (no <c>offer_issuer_id</c>) cannot be verified with a pubkey
-/// comparison alone; full Merkle-root verification would be needed for those.
+/// <b>Verification:</b> <see cref="VerifyInvoiceMatchesOffer"/> performs three checks
+/// to confirm an invoice was generated from the specified offer:
+/// (1) <c>invoice_node_id</c> must match <c>offer_issuer_id</c> or the final blinded
+/// path hop; (2) the Merkle root of offer-range TLV fields (types 2–22) must be
+/// identical in offer and invoice.
 /// </remarks>
 internal static class Bolt12InvoiceParser
 {
@@ -23,6 +25,10 @@ internal static class Bolt12InvoiceParser
     private const ulong InvoiceNodeIdType       = 176; // 0xB0 — invoice_node_id
     private const ulong OfferIssuerIdType       =  22; // 0x16 — offer_issuer_id
     private const ulong OfferPathsType          =  16; // 0x10 — offer_paths
+
+    // Offer-range TLV types: types 2–22 are offer fields embedded in invoices.
+    private const ulong OfferRangeMin = 2;
+    private const ulong OfferRangeMax = 22;
 
     private const string InvoiceHrpPrefix = "lni";
     private const string OfferHrpPrefix = "lno";
@@ -176,17 +182,18 @@ internal static class Bolt12InvoiceParser
 
     /// <summary>
     /// Verifies that <paramref name="bolt12Invoice"/> was issued for
-    /// <paramref name="bolt12Offer"/> using two checks per BOLT 12 §Invoice:
+    /// <paramref name="bolt12Offer"/> using three checks per BOLT 12 §Invoice:
     /// <list type="number">
     ///   <item>If the offer has an explicit <c>offer_issuer_id</c> (TLV 22),
     ///   <c>invoice_node_id</c> (TLV 176) must equal it.</item>
     ///   <item>Otherwise, if the offer has blinded paths (TLV 16),
     ///   <c>invoice_node_id</c> must equal the <c>blinded_node_id</c> of the
     ///   final hop in at least one of those paths.</item>
+    ///   <item>The BOLT 12 Merkle root of the offer-range TLV fields (types 2–22)
+    ///   in the invoice must equal the Merkle root computed from the same fields in
+    ///   the original offer — confirming the invoice was generated from this specific
+    ///   offer, not merely by the same key.</item>
     /// </list>
-    /// When the offer provides neither an issuer key nor blinded paths, the
-    /// method returns without error (the offer is unusually permissive; nothing
-    /// can be checked without a full BOLT 12 Merkle-root implementation).
     /// </summary>
     /// <param name="bolt12Invoice">The fetched BOLT 12 invoice (<c>lni1…</c>).</param>
     /// <param name="bolt12Offer">The original BOLT 12 offer (<c>lno1…</c>) the invoice was requested for.</param>
@@ -194,37 +201,61 @@ internal static class Bolt12InvoiceParser
     /// Either string is not valid BOLT 12, or the invoice is missing <c>invoice_node_id</c>.
     /// </exception>
     /// <exception cref="InvalidOperationException">
-    /// The invoice's signing key does not match the offer — the invoice was not
-    /// issued by the offer's owner.
+    /// The invoice's signing key does not match the offer, or the offer-range Merkle root
+    /// is inconsistent — the invoice was not generated from this offer.
     /// </exception>
     public static void VerifyInvoiceMatchesOffer(string bolt12Invoice, string bolt12Offer)
     {
-        var offerIssuerId = ExtractOfferIssuerId(bolt12Offer);
+        var offerTlv = DecodeBolt12Bech32(bolt12Offer.ToLowerInvariant());
+        var invoiceTlv = DecodeBolt12Bech32(bolt12Invoice.ToLowerInvariant());
+
+        var offerIssuerId = FindTlvRecord(offerTlv, OfferIssuerIdType);
         if (offerIssuerId is not null)
         {
             // Check 1: explicit issuer_id pubkey match.
-            var invoiceNodeId = ExtractNodeId(bolt12Invoice);
+            var invoiceNodeId = FindTlvRecord(invoiceTlv, InvoiceNodeIdType);
+            if (invoiceNodeId is null || invoiceNodeId.Length != 33)
+                throw new FormatException(
+                    $"invoice_node_id (TLV type {InvoiceNodeIdType}) not found or has wrong length in BOLT 12 invoice.");
             if (!invoiceNodeId.AsSpan().SequenceEqual(offerIssuerId))
                 throw new InvalidOperationException(
                     "BOLT 12 invoice_node_id does not match offer_issuer_id — " +
                     "the invoice was not issued by the offer's owner.");
-            return;
+        }
+        else
+        {
+            // Check 2: blinded-path offer — invoice_node_id must equal the
+            // blinded_node_id of the final hop in at least one of the offer's paths.
+            var pathsValue = FindTlvRecord(offerTlv, OfferPathsType);
+            if (pathsValue is not null && pathsValue.Length > 0)
+            {
+                var lastHops = ParseBlindedPathLastHops(pathsValue);
+                if (lastHops.Count > 0)
+                {
+                    var invoiceNodeIdBlinded = FindTlvRecord(invoiceTlv, InvoiceNodeIdType);
+                    if (invoiceNodeIdBlinded is null)
+                        throw new FormatException(
+                            $"invoice_node_id (TLV type {InvoiceNodeIdType}) not found in BOLT 12 invoice.");
+                    if (!lastHops.Any(hop => invoiceNodeIdBlinded.AsSpan().SequenceEqual(hop)))
+                        throw new InvalidOperationException(
+                            "BOLT 12 invoice_node_id does not match the final hop of any " +
+                            "blinded path in the offer — the invoice was not issued by the offer's owner.");
+                }
+            }
         }
 
-        // Check 2: blinded-path offer — invoice_node_id must equal the
-        // blinded_node_id of the final hop in at least one of the offer's paths.
-        var offerTlv = DecodeBolt12Bech32(bolt12Offer.ToLowerInvariant());
-        var pathsValue = FindTlvRecord(offerTlv, OfferPathsType);
-        if (pathsValue is null || pathsValue.Length == 0) return; // cannot verify
-
-        var lastHops = ParseBlindedPathLastHops(pathsValue);
-        if (lastHops.Count == 0) return; // cannot verify
-
-        var invoiceNodeIdBlinded = ExtractNodeId(bolt12Invoice);
-        if (!lastHops.Any(hop => invoiceNodeIdBlinded.AsSpan().SequenceEqual(hop)))
-            throw new InvalidOperationException(
-                "BOLT 12 invoice_node_id does not match the final hop of any " +
-                "blinded path in the offer — the invoice was not issued by the offer's owner.");
+        // Check 3: the Merkle root of offer-range TLV fields (types 2–22) must be
+        // identical in both the offer and the invoice, confirming the invoice was
+        // generated from this specific offer.
+        var offerRoot = ComputeOfferIdMerkleRoot(offerTlv);
+        if (offerRoot is not null)
+        {
+            var invoiceRoot = ComputeOfferIdMerkleRoot(invoiceTlv);
+            if (invoiceRoot is null || !offerRoot.AsSpan().SequenceEqual(invoiceRoot))
+                throw new InvalidOperationException(
+                    "BOLT 12 invoice offer_id (Merkle root of offer-range TLVs 2–22) does not match " +
+                    "the original offer — the invoice was not generated from this offer.");
+        }
     }
 
     /// <summary>
@@ -418,6 +449,27 @@ internal static class Bolt12InvoiceParser
     }
 
     /// <summary>
+    /// Enumerates all TLV records in <paramref name="tlv"/>, yielding the type
+    /// and the full raw wire bytes (type BigSize + length BigSize + value) for
+    /// each record.
+    /// </summary>
+    internal static IEnumerable<(ulong Type, byte[] Raw)> EnumerateTlvRecordsRaw(byte[] tlv)
+    {
+        var pos = 0;
+        while (pos < tlv.Length)
+        {
+            var start = pos;
+            var type = ReadBigSize(tlv, ref pos);
+            if (pos >= tlv.Length) yield break;
+            var length = (int)ReadBigSize(tlv, ref pos);
+            if (pos + length > tlv.Length) yield break;
+            var raw = tlv[start..(pos + length)];
+            pos += length;
+            yield return (type, raw);
+        }
+    }
+
+    /// <summary>
     /// Reads one Lightning BigSize-encoded <c>ulong</c> from <paramref name="data"/>
     /// at <paramref name="pos"/> and advances <paramref name="pos"/> past it.
     /// </summary>
@@ -435,5 +487,112 @@ internal static class Bolt12InvoiceParser
                  | (ulong)data[pos++] << 24 | (ulong)data[pos++] << 16
                  | (ulong)data[pos++] << 8 | data[pos++]
         };
+    }
+
+    // ─── BOLT 12 Merkle hashing ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Computes the BOLT 12 tagged hash:
+    /// <c>H(tag, msg) = SHA256(SHA256(tag) || SHA256(tag) || msg)</c>.
+    /// </summary>
+    private static byte[] TaggedHash(ReadOnlySpan<byte> tag, ReadOnlySpan<byte> msg)
+    {
+        var tagHash = SHA256.HashData(tag);
+        var input = new byte[64 + msg.Length];
+        tagHash.CopyTo(input.AsSpan(0));
+        tagHash.CopyTo(input.AsSpan(32));
+        msg.CopyTo(input.AsSpan(64));
+        return SHA256.HashData(input);
+    }
+
+    /// <summary>
+    /// Encodes <paramref name="val"/> as a Lightning BigSize byte sequence.
+    /// Used to produce the type bytes fed into the BOLT 12 Merkle nonce hash.
+    /// </summary>
+    private static byte[] BigSizeEncode(ulong val)
+    {
+        if (val <= 0xFC) return [(byte)val];
+        if (val <= 0xFFFF) return [0xFD, (byte)(val >> 8), (byte)val];
+        if (val <= 0xFFFF_FFFF)
+            return [0xFE, (byte)(val >> 24), (byte)(val >> 16), (byte)(val >> 8), (byte)val];
+        return
+        [
+            0xFF,
+            (byte)(val >> 56), (byte)(val >> 48), (byte)(val >> 40), (byte)(val >> 32),
+            (byte)(val >> 24), (byte)(val >> 16), (byte)(val >> 8), (byte)val,
+        ];
+    }
+
+    /// <summary>
+    /// Computes <c>H("LnBranch", min(a,b) || max(a,b))</c> — the branch node
+    /// hash used in BOLT 12 Merkle tree construction.
+    /// </summary>
+    private static byte[] BranchHash(byte[] a, byte[] b)
+    {
+        var cmp = a.AsSpan().SequenceCompareTo(b.AsSpan());
+        var (lo, hi) = cmp <= 0 ? (a, b) : (b, a);
+        var input = new byte[64];
+        lo.CopyTo(input.AsSpan(0));
+        hi.CopyTo(input.AsSpan(32));
+        return TaggedHash("LnBranch"u8, input);
+    }
+
+    /// <summary>
+    /// Computes the BOLT 12 Merkle root over an ordered list of TLV records
+    /// using the tagged-hash tree algorithm from BOLT 12 Appendix A.
+    /// </summary>
+    /// <remarks>
+    /// For each record <c>r</c>:
+    /// <list type="bullet">
+    ///   <item><c>leaf = H("LnLeaf", r_raw)</c></item>
+    ///   <item><c>nonce = H("LnNonce" || first_raw, BigSize(r.Type))</c></item>
+    ///   <item><c>pair = H("LnBranch", sort(leaf, nonce))</c></item>
+    /// </list>
+    /// The pair nodes are then combined bottom-up: adjacent pairs are merged with
+    /// <c>H("LnBranch", sort(…))</c>; an odd last node is promoted unchanged.
+    /// </remarks>
+    internal static byte[] ComputeMerkleRoot(IReadOnlyList<(ulong Type, byte[] Raw)> records)
+    {
+        if (records.Count == 0)
+            throw new ArgumentException("Record list must not be empty.", nameof(records));
+
+        var firstRaw = records[0].Raw;
+        var nonceTagPrefix = new byte[7 + firstRaw.Length];
+        "LnNonce"u8.CopyTo(nonceTagPrefix.AsSpan(0));
+        firstRaw.CopyTo(nonceTagPrefix.AsSpan(7));
+
+        // Compute per-record pair nodes.
+        var nodes = new List<byte[]>(records.Count);
+        foreach (var (type, raw) in records)
+        {
+            var leaf = TaggedHash("LnLeaf"u8, raw);
+            var nonce = TaggedHash(nonceTagPrefix, BigSizeEncode(type));
+            nodes.Add(BranchHash(leaf, nonce));
+        }
+
+        // Build tree: combine adjacent pairs; promote last unpaired node.
+        while (nodes.Count > 1)
+        {
+            var next = new List<byte[]>((nodes.Count + 1) / 2);
+            for (var i = 0; i + 1 < nodes.Count; i += 2)
+                next.Add(BranchHash(nodes[i], nodes[i + 1]));
+            if (nodes.Count % 2 == 1) next.Add(nodes[^1]);
+            nodes = next;
+        }
+
+        return nodes[0];
+    }
+
+    /// <summary>
+    /// Computes the BOLT 12 offer_id: the Merkle root of TLV records with types
+    /// in the offer range (2–22) from <paramref name="tlvStream"/>.
+    /// Returns <c>null</c> when no offer-range records are present.
+    /// </summary>
+    internal static byte[]? ComputeOfferIdMerkleRoot(byte[] tlvStream)
+    {
+        var offerRecords = EnumerateTlvRecordsRaw(tlvStream)
+            .Where(r => r.Type >= OfferRangeMin && r.Type <= OfferRangeMax)
+            .ToList();
+        return offerRecords.Count == 0 ? null : ComputeMerkleRoot(offerRecords);
     }
 }

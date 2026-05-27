@@ -315,11 +315,27 @@ public class Bolt12InvoiceParserTests
         Assert.That(result, Is.Null);
     }
 
+    // Builds a lni1 invoice whose offer-range TLVs (types 2–22) are taken verbatim
+    // from the given offer, followed by invoice_payment_hash (168) and invoice_node_id (176).
+    // This mirrors what a real BOLT 12 payee returns: all offer fields echoed back.
+    private static string BuildInvoiceWithOfferTlvsAndNodeId(string offer, byte[] paymentHash, byte[] nodeId)
+    {
+        var offerTlv = Bolt12InvoiceParser.DecodeBolt12Bech32(offer.ToLowerInvariant());
+        var offerRangeBytes = Bolt12InvoiceParser.EnumerateTlvRecordsRaw(offerTlv)
+            .Where(r => r.Type >= 2 && r.Type <= 22)
+            .SelectMany(r => r.Raw)
+            .ToArray();
+        // offer-range types (2–22) < invoice_payment_hash (168) < invoice_node_id (176)
+        byte[] tlv = [.. offerRangeBytes, 0xA8, 0x20, .. paymentHash, 0xB0, 0x21, .. nodeId];
+        return Bolt12InvoiceParser.EncodeBolt12Bech32("lni", tlv);
+    }
+
     [Test]
     public void VerifyInvoiceMatchesOffer_MatchingKeys_DoesNotThrow()
     {
         // invoice_node_id == offer_issuer_id (both = KnownNodeId / MinimalOffer key).
-        var invoice = BuildInvoiceWithNodeId(KnownPaymentHash, KnownNodeId);
+        // Invoice also echoes the offer's TLV fields so Check 3 (Merkle root) passes.
+        var invoice = BuildInvoiceWithOfferTlvsAndNodeId(MinimalOffer, KnownPaymentHash, KnownNodeId);
 
         Assert.DoesNotThrow(() =>
             Bolt12InvoiceParser.VerifyInvoiceMatchesOffer(invoice, MinimalOffer));
@@ -361,7 +377,8 @@ public class Bolt12InvoiceParserTests
     [Test]
     public void VerifyInvoiceMatchesOffer_BlindedPathMatch_DoesNotThrow()
     {
-        var invoice = BuildInvoiceWithNodeId(KnownPaymentHash, BlindedLastHopNodeId);
+        // Invoice echoes the offer's TLV fields so Check 3 (Merkle root) passes.
+        var invoice = BuildInvoiceWithOfferTlvsAndNodeId(BlindedPathOnlyOffer, KnownPaymentHash, BlindedLastHopNodeId);
 
         Assert.DoesNotThrow(() =>
             Bolt12InvoiceParser.VerifyInvoiceMatchesOffer(invoice, BlindedPathOnlyOffer));
@@ -565,6 +582,142 @@ public class Bolt12InvoiceParserTests
         var fromUpper = Bolt12InvoiceParser.DecodeBolt12Bech32(upper.ToLowerInvariant());
 
         Assert.That(fromLower, Is.EqualTo(fromUpper));
+    }
+
+    // ─── BOLT 12 Merkle hashing (signature-test.json vectors) ────────────────
+    // Source: https://github.com/lightning/bolts/blob/master/bolt12/signature-test.json
+    // Each test case passes raw TLV records (type + full wire bytes) and the
+    // expected Merkle root as a lowercase hex string.
+
+    private static IEnumerable<TestCaseData> MerkleSignatureTestCases()
+    {
+        // Vector 1: n1 — tlv1 type=1 value=1000
+        yield return new TestCaseData(
+            new List<(ulong, byte[])>
+            {
+                (1UL, Convert.FromHexString("010203e8")),
+            },
+            "b013756c8fee86503a0b4abdab4cddeb1af5d344ca6fc2fa8b6c08938caa6f93"
+        ).SetName("one_tlv_1000");
+
+        // Vector 2: n1 — tlv1 type=1 value=1000, tlv2 type=2 value=1x2x3
+        yield return new TestCaseData(
+            new List<(ulong, byte[])>
+            {
+                (1UL, Convert.FromHexString("010203e8")),
+                (2UL, Convert.FromHexString("02080000010000020003")),
+            },
+            "c3774abbf4815aa54ccaa026bff6581f01f3be5fe814c620a252534f434bc0d1"
+        ).SetName("two_tlvs_1000_1x2x3");
+
+        // Vector 3: n1 — tlv1=1000, tlv2=1x2x3, tlv3=pubkey(0266e4…)+1+2
+        yield return new TestCaseData(
+            new List<(ulong, byte[])>
+            {
+                (1UL, Convert.FromHexString("010203e8")),
+                (2UL, Convert.FromHexString("02080000010000020003")),
+                (3UL, Convert.FromHexString(
+                    "03310266e4598d1d3c415f572a8488830b60f7e744ed9235eb0b1ba93283b315c03518" +
+                    "00000000000000010000000000000002")),
+            },
+            "ab2e79b1283b0b31e0b035258de23782df6b89a38cfa7237bde69aed1a658c5d"
+        ).SetName("three_tlvs_1000_1x2x3_pubkey");
+
+        // Vector 4: invoice_request — offer_issuer_id=Alice, offer_description="A Mathematical
+        // Treatise", offer_amount=100 USD, invreq_metadata=0, invreq_payer_id=Bob.
+        // TLV types: 0 (invreq_metadata), 6 (offer_currency), 8 (offer_amount),
+        //            10 (offer_description), 22 (offer_issuer_id), 88 (invreq_payer_id).
+        yield return new TestCaseData(
+            new List<(ulong, byte[])>
+            {
+                ( 0UL, Convert.FromHexString("00080000000000000000")),
+                ( 6UL, Convert.FromHexString("0603555344")),
+                ( 8UL, Convert.FromHexString("080164")),
+                (10UL, Convert.FromHexString("0a1741204d617468656d61746963616c205472656174697365")),
+                (22UL, Convert.FromHexString("162102eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619")),
+                (88UL, Convert.FromHexString("58210324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c")),
+            },
+            "608407c18ad9a94d9ea2bcdbe170b6c20c462a7833a197621c916f78cf18e624"
+        ).SetName("invoice_request_alice_bob");
+    }
+
+    [TestCaseSource(nameof(MerkleSignatureTestCases))]
+    public void ComputeMerkleRoot_SignatureTestVector(
+        List<(ulong, byte[])> records, string expectedHex)
+    {
+        var root = Bolt12InvoiceParser.ComputeMerkleRoot(records);
+
+        Assert.That(Convert.ToHexString(root).ToLowerInvariant(), Is.EqualTo(expectedHex));
+    }
+
+    [Test]
+    public void ComputeMerkleRoot_EmptyList_ThrowsArgumentException()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            Bolt12InvoiceParser.ComputeMerkleRoot([]));
+    }
+
+    [Test]
+    public void ComputeOfferIdMerkleRoot_MinimalOffer_ReturnsNonNull()
+    {
+        // MinimalOffer has exactly one TLV: type 22 (offer_issuer_id) which is in range 2–22.
+        var tlv = Bolt12InvoiceParser.DecodeBolt12Bech32(MinimalOffer);
+
+        var root = Bolt12InvoiceParser.ComputeOfferIdMerkleRoot(tlv);
+
+        Assert.That(root, Is.Not.Null);
+        Assert.That(root!.Length, Is.EqualTo(32));
+    }
+
+    [Test]
+    public void ComputeOfferIdMerkleRoot_EmptyStream_ReturnsNull()
+    {
+        var root = Bolt12InvoiceParser.ComputeOfferIdMerkleRoot([]);
+
+        Assert.That(root, Is.Null);
+    }
+
+    [Test]
+    public void ComputeOfferIdMerkleRoot_StreamWithNoOfferRangeTlvs_ReturnsNull()
+    {
+        // Invoice with only type 168 and 176 — outside the 2–22 offer range.
+        var tlv = Bolt12InvoiceParser.DecodeBolt12Bech32(
+            BuildInvoiceWithNodeId(KnownPaymentHash, KnownNodeId));
+
+        var root = Bolt12InvoiceParser.ComputeOfferIdMerkleRoot(tlv);
+
+        Assert.That(root, Is.Null);
+    }
+
+    [Test]
+    public void ComputeOfferIdMerkleRoot_OfferAndMatchingInvoice_RootsAreEqual()
+    {
+        // Verify that extracting offer-range TLVs from the offer and from a
+        // properly constructed invoice yields the same Merkle root.
+        var offerTlv = Bolt12InvoiceParser.DecodeBolt12Bech32(MinimalOffer);
+        var invoice = BuildInvoiceWithOfferTlvsAndNodeId(MinimalOffer, KnownPaymentHash, KnownNodeId);
+        var invoiceTlv = Bolt12InvoiceParser.DecodeBolt12Bech32(invoice);
+
+        var offerRoot = Bolt12InvoiceParser.ComputeOfferIdMerkleRoot(offerTlv);
+        var invoiceRoot = Bolt12InvoiceParser.ComputeOfferIdMerkleRoot(invoiceTlv);
+
+        Assert.That(offerRoot, Is.Not.Null);
+        Assert.That(invoiceRoot, Is.Not.Null);
+        Assert.That(offerRoot, Is.EqualTo(invoiceRoot));
+    }
+
+    [Test]
+    public void VerifyInvoiceMatchesOffer_OfferMerkleRootMismatch_ThrowsInvalidOperationException()
+    {
+        // Invoice has invoice_node_id = KnownNodeId (passes Check 1 against MinimalOffer),
+        // but its offer_issuer_id TLV (type 22) carries OtherNodeId instead of KnownNodeId,
+        // so the Merkle root of offer-range TLVs will not match. Check 3 must reject it.
+        byte[] type22WithWrongKey = [0x16, 0x21, .. OtherNodeId]; // type 22, wrong key
+        byte[] tlv = [.. type22WithWrongKey, 0xA8, 0x20, .. KnownPaymentHash, 0xB0, 0x21, .. KnownNodeId];
+        var invoice = Bolt12InvoiceParser.EncodeBolt12Bech32("lni", tlv);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            Bolt12InvoiceParser.VerifyInvoiceMatchesOffer(invoice, MinimalOffer));
     }
 
 }
