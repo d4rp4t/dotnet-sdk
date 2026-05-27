@@ -14,9 +14,14 @@ public class Bolt12FetchRequest
     [JsonPropertyName("offer")]
     public required string Offer { get; set; }
 
-    /// <summary>Amount in satoshis for the invoice that should be fetched.</summary>
+    /// <summary>
+    /// Amount in satoshis for the invoice that should be fetched.
+    /// <c>null</c> when the offer already encodes a fixed amount — Boltz will
+    /// use the amount embedded in the offer.
+    /// </summary>
     [JsonPropertyName("amount")]
-    public required long Amount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Amount { get; set; }
 
     /// <summary>Optional note to include in the invoice request.</summary>
     [JsonPropertyName("note")]
