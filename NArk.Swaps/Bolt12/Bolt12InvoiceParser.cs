@@ -22,6 +22,7 @@ internal static class Bolt12InvoiceParser
     private const ulong InvoicePaymentHashType = 168; // 0xA8 — invoice_payment_hash
     private const ulong InvoiceNodeIdType       = 176; // 0xB0 — invoice_node_id
     private const ulong OfferIssuerIdType       =  22; // 0x16 — offer_issuer_id
+    private const ulong OfferPathsType          =  16; // 0x10 — offer_paths
 
     private const string InvoiceHrpPrefix = "lni";
     private const string OfferHrpPrefix = "lno";
@@ -175,39 +176,127 @@ internal static class Bolt12InvoiceParser
 
     /// <summary>
     /// Verifies that <paramref name="bolt12Invoice"/> was issued for
-    /// <paramref name="bolt12Offer"/> by asserting that
-    /// <c>invoice_node_id</c> (TLV 176) equals <c>offer_issuer_id</c> (TLV 22).
+    /// <paramref name="bolt12Offer"/> using two checks per BOLT 12 §Invoice:
+    /// <list type="number">
+    ///   <item>If the offer has an explicit <c>offer_issuer_id</c> (TLV 22),
+    ///   <c>invoice_node_id</c> (TLV 176) must equal it.</item>
+    ///   <item>Otherwise, if the offer has blinded paths (TLV 16),
+    ///   <c>invoice_node_id</c> must equal the <c>blinded_node_id</c> of the
+    ///   final hop in at least one of those paths.</item>
+    /// </list>
+    /// When the offer provides neither an issuer key nor blinded paths, the
+    /// method returns without error (the offer is unusually permissive; nothing
+    /// can be checked without a full BOLT 12 Merkle-root implementation).
     /// </summary>
-    /// <remarks>
-    /// Per BOLT 12 §Invoice: "if <c>offer_issuer_id</c> is present, MUST set
-    /// <c>invoice_node_id</c> to <c>offer_issuer_id</c>." Callers MUST reject the
-    /// invoice when this check fails — the invoice may have been substituted by
-    /// a man-in-the-middle (e.g. Boltz acting as the offer resolver).
-    ///
-    /// When the offer carries no explicit <c>offer_issuer_id</c> (blinded-path-only
-    /// offers), this method returns without error; full Merkle-root verification
-    /// would be needed to authenticate such invoices.
-    /// </remarks>
     /// <param name="bolt12Invoice">The fetched BOLT 12 invoice (<c>lni1…</c>).</param>
     /// <param name="bolt12Offer">The original BOLT 12 offer (<c>lno1…</c>) the invoice was requested for.</param>
     /// <exception cref="FormatException">
     /// Either string is not valid BOLT 12, or the invoice is missing <c>invoice_node_id</c>.
     /// </exception>
     /// <exception cref="InvalidOperationException">
-    /// <c>invoice_node_id</c> does not match <c>offer_issuer_id</c> — the invoice
-    /// was not issued by the offer's owner.
+    /// The invoice's signing key does not match the offer — the invoice was not
+    /// issued by the offer's owner.
     /// </exception>
     public static void VerifyInvoiceMatchesOffer(string bolt12Invoice, string bolt12Offer)
     {
         var offerIssuerId = ExtractOfferIssuerId(bolt12Offer);
-        if (offerIssuerId is null) return; // blinded-path-only offer, cannot verify
+        if (offerIssuerId is not null)
+        {
+            // Check 1: explicit issuer_id pubkey match.
+            var invoiceNodeId = ExtractNodeId(bolt12Invoice);
+            if (!invoiceNodeId.AsSpan().SequenceEqual(offerIssuerId))
+                throw new InvalidOperationException(
+                    "BOLT 12 invoice_node_id does not match offer_issuer_id — " +
+                    "the invoice was not issued by the offer's owner.");
+            return;
+        }
 
-        var invoiceNodeId = ExtractNodeId(bolt12Invoice);
+        // Check 2: blinded-path offer — invoice_node_id must equal the
+        // blinded_node_id of the final hop in at least one of the offer's paths.
+        var offerTlv = DecodeBolt12Bech32(bolt12Offer.ToLowerInvariant());
+        var pathsValue = FindTlvRecord(offerTlv, OfferPathsType);
+        if (pathsValue is null || pathsValue.Length == 0) return; // cannot verify
 
-        if (!invoiceNodeId.AsSpan().SequenceEqual(offerIssuerId))
+        var lastHops = ParseBlindedPathLastHops(pathsValue);
+        if (lastHops.Count == 0) return; // cannot verify
+
+        var invoiceNodeIdBlinded = ExtractNodeId(bolt12Invoice);
+        if (!lastHops.Any(hop => invoiceNodeIdBlinded.AsSpan().SequenceEqual(hop)))
             throw new InvalidOperationException(
-                "BOLT 12 invoice_node_id does not match offer_issuer_id — " +
-                "the invoice was not issued by the offer's owner.");
+                "BOLT 12 invoice_node_id does not match the final hop of any " +
+                "blinded path in the offer — the invoice was not issued by the offer's owner.");
+    }
+
+    /// <summary>
+    /// Parses the raw value of an <c>offer_paths</c> TLV record (type 16) and
+    /// returns the <c>blinded_node_id</c> of the final hop in each blinded path.
+    /// </summary>
+    /// <remarks>
+    /// Blinded path wire format (BOLT 4 §Route Blinding):
+    /// <code>
+    /// introduction_node  33 bytes (02/03 prefix) | 9 bytes sciddir
+    /// blinding_point     33 bytes
+    /// num_hops           u8
+    /// per hop:
+    ///   blinded_node_id  33 bytes
+    ///   enc_data_len     u16 big-endian
+    ///   enc_data         enc_data_len bytes
+    /// </code>
+    /// Multiple paths are concatenated in the TLV value.
+    /// </remarks>
+    internal static IReadOnlyList<byte[]> ParseBlindedPathLastHops(byte[] pathsValue)
+    {
+        var result = new List<byte[]>();
+        var pos = 0;
+        while (pos < pathsValue.Length)
+        {
+            var before = pos;
+            if (!TryReadBlindedPathLastHop(pathsValue, ref pos, out var lastHop) || lastHop is null)
+                break;
+            if (pos <= before) break; // guard against infinite loop on malformed data
+            result.Add(lastHop);
+        }
+        return result;
+    }
+
+    private static bool TryReadBlindedPathLastHop(byte[] data, ref int pos, out byte[]? lastHop)
+    {
+        lastHop = null;
+        var start = pos;
+
+        // introduction_node: 33 bytes when compressed pubkey (0x02/0x03 prefix),
+        // 9 bytes when sciddir (short_channel_id || direction).
+        if (pos >= data.Length) return false;
+        var introLen = data[pos] is 0x02 or 0x03 ? 33 : 9;
+        if (pos + introLen > data.Length) { pos = start; return false; }
+        pos += introLen;
+
+        // blinding_point: 33 bytes
+        if (pos + 33 > data.Length) { pos = start; return false; }
+        pos += 33;
+
+        // num_hops: u8
+        if (pos >= data.Length) { pos = start; return false; }
+        var numHops = data[pos++];
+
+        for (var hop = 0; hop < numHops; hop++)
+        {
+            if (pos + 33 > data.Length) { pos = start; return false; }
+            var nodeId = data[pos..(pos + 33)];
+            pos += 33;
+
+            // encrypted_recipient_data: u16 big-endian length prefix
+            if (pos + 2 > data.Length) { pos = start; return false; }
+            var encLen = (data[pos] << 8) | data[pos + 1];
+            pos += 2;
+
+            if (pos + encLen > data.Length) { pos = start; return false; }
+            pos += encLen;
+
+            lastHop = nodeId; // keep updating — last assignment is the final hop
+        }
+
+        return lastHop is not null;
     }
 
     // ─── Bech32 without-checksum codec ────────────────────────────────────────

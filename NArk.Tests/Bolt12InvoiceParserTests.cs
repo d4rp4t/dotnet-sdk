@@ -334,16 +334,65 @@ public class Bolt12InvoiceParserTests
             Bolt12InvoiceParser.VerifyInvoiceMatchesOffer(invoice, MinimalOffer));
     }
 
+    // "with no issuer_id and blinded path via Bob" from offers-test.json.
+    // TLV 16 structure: intro_node=0324653e... (33B), blinding_point=0202...02 (33B),
+    // num_hops=2, hop1={blinded_node_id=0202...02, enc=0x00×16},
+    //             hop2={blinded_node_id=0202...02, enc=0x11×8}.
+    // → last hop blinded_node_id = 33 bytes of 0x02.
+    private const string BlindedPathOnlyOffer =
+        "lno1pgx9getnwss8vetrw3hhyucs5ypjgef743p5fzqq9nqxh0ah7y87rzv3ud0eleps9kl2d5348hq2k8qzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgqpqqqqqqqqqqqqqqqqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqqzq3zyg3zyg3zygszqqqqyqqqqsqqvpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqsq";
+
+    // blinded_node_id of the last hop in BlindedPathOnlyOffer (33 × 0x02).
+    private static readonly byte[] BlindedLastHopNodeId =
+        Convert.FromHexString("020202020202020202020202020202020202020202020202020202020202020202");
+
     [Test]
-    public void VerifyInvoiceMatchesOffer_BlindedPathOnlyOffer_SkipsVerification()
+    public void ParseBlindedPathLastHops_NoIssuerIdOffer_ReturnsLastHopNodeId()
     {
-        // Offer has no offer_issuer_id — verification is skipped, any invoice passes.
-        const string blindedPathOffer =
-            "lno1pgx9getnwss8vetrw3hhyucs5ypjgef743p5fzqq9nqxh0ah7y87rzv3ud0eleps9kl2d5348hq2k8qzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgqpqqqqqqqqqqqqqqqqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqqzq3zyg3zyg3zygszqqqqyqqqqsqqvpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqsq";
-        var invoice = BuildInvoiceWithNodeId(KnownPaymentHash, OtherNodeId);
+        var tlv = Bolt12InvoiceParser.DecodeBolt12Bech32(BlindedPathOnlyOffer);
+        var pathsValue = Bolt12InvoiceParser.FindTlvRecord(tlv, 16)!;
+
+        var lastHops = Bolt12InvoiceParser.ParseBlindedPathLastHops(pathsValue);
+
+        Assert.That(lastHops, Has.Count.EqualTo(1));
+        Assert.That(lastHops[0], Is.EqualTo(BlindedLastHopNodeId));
+    }
+
+    [Test]
+    public void VerifyInvoiceMatchesOffer_BlindedPathMatch_DoesNotThrow()
+    {
+        var invoice = BuildInvoiceWithNodeId(KnownPaymentHash, BlindedLastHopNodeId);
 
         Assert.DoesNotThrow(() =>
-            Bolt12InvoiceParser.VerifyInvoiceMatchesOffer(invoice, blindedPathOffer));
+            Bolt12InvoiceParser.VerifyInvoiceMatchesOffer(invoice, BlindedPathOnlyOffer));
+    }
+
+    [Test]
+    public void VerifyInvoiceMatchesOffer_BlindedPathMismatch_ThrowsInvalidOperationException()
+    {
+        var invoice = BuildInvoiceWithNodeId(KnownPaymentHash, OtherNodeId);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            Bolt12InvoiceParser.VerifyInvoiceMatchesOffer(invoice, BlindedPathOnlyOffer));
+    }
+
+    [Test]
+    public void ParseBlindedPathLastHops_TwoBlindedPaths_ReturnsTwoLastHops()
+    {
+        // "... and with second blinded path via 1x2x3 (direction 1)" from offers-test.json.
+        // TLV 16, length 298 — two concatenated blinded paths, each with 2 hops.
+        // Both paths have blinded_node_id = 0202...02 for their last hop.
+        const string twoPathOffer =
+            "lno1pgx9getnwss8vetrw3hhyucsl5qj5qeyv5l2cs6y3qqzesrth7mlzrlp3xg7xhulusczm04x6g6nms9trspqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqqsqqqqqqqqqqqqqqqqqqqqqqqqqqpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqsqpqg3zyg3zyg3zygpqqqqzqqqqgqqxqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqqgqqqqqqqqqqqqqqqqqqqqqqqqqqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgqqsg3zyg3zyg3zygtzzqhwcuj966ma9n9nqwqtl032xeyv6755yeflt235pmww58egx6rxry";
+
+        var tlv = Bolt12InvoiceParser.DecodeBolt12Bech32(twoPathOffer);
+        var pathsValue = Bolt12InvoiceParser.FindTlvRecord(tlv, 16)!;
+
+        var lastHops = Bolt12InvoiceParser.ParseBlindedPathLastHops(pathsValue);
+
+        Assert.That(lastHops, Has.Count.EqualTo(2));
+        Assert.That(lastHops[0], Is.EqualTo(BlindedLastHopNodeId));
+        Assert.That(lastHops[1], Is.EqualTo(BlindedLastHopNodeId));
     }
 
     // ─── Official BOLT 12 test vectors (lightning/bolts bolt12/) ─────────────
