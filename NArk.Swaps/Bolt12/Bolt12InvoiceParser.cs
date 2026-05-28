@@ -97,8 +97,7 @@ internal static class Bolt12InvoiceParser
         {
             tlv = DecodeBolt12Bech32(lower);
         }
-        catch (FormatException) { throw; }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not FormatException)
         {
             throw new FormatException("Failed to decode BOLT 12 invoice envelope.", ex);
         }
@@ -208,10 +207,12 @@ internal static class Bolt12InvoiceParser
     {
         var offerTlv = DecodeBolt12Bech32(bolt12Offer.ToLowerInvariant());
         var invoiceTlv = DecodeBolt12Bech32(bolt12Invoice.ToLowerInvariant());
+        var anyCheckPerformed = false;
 
         var offerIssuerId = FindTlvRecord(offerTlv, OfferIssuerIdType);
         if (offerIssuerId is not null)
         {
+            anyCheckPerformed = true;
             // Check 1: explicit issuer_id pubkey match.
             var invoiceNodeId = FindTlvRecord(invoiceTlv, InvoiceNodeIdType);
             if (invoiceNodeId is null || invoiceNodeId.Length != 33)
@@ -232,10 +233,15 @@ internal static class Bolt12InvoiceParser
                 var lastHops = ParseBlindedPathLastHops(pathsValue);
                 if (lastHops.Count > 0)
                 {
+                    anyCheckPerformed = true;
                     var invoiceNodeIdBlinded = FindTlvRecord(invoiceTlv, InvoiceNodeIdType);
                     if (invoiceNodeIdBlinded is null)
                         throw new FormatException(
                             $"invoice_node_id (TLV type {InvoiceNodeIdType}) not found in BOLT 12 invoice.");
+                    if (invoiceNodeIdBlinded.Length != 33)
+                        throw new FormatException(
+                            $"invoice_node_id (TLV type {InvoiceNodeIdType}) has wrong length " +
+                            $"{invoiceNodeIdBlinded.Length} (expected 33) in BOLT 12 invoice.");
                     if (!lastHops.Any(hop => invoiceNodeIdBlinded.AsSpan().SequenceEqual(hop)))
                         throw new InvalidOperationException(
                             "BOLT 12 invoice_node_id does not match the final hop of any " +
@@ -250,12 +256,18 @@ internal static class Bolt12InvoiceParser
         var offerRoot = ComputeOfferIdMerkleRoot(offerTlv);
         if (offerRoot is not null)
         {
+            anyCheckPerformed = true;
             var invoiceRoot = ComputeOfferIdMerkleRoot(invoiceTlv);
             if (invoiceRoot is null || !offerRoot.AsSpan().SequenceEqual(invoiceRoot))
                 throw new InvalidOperationException(
                     "BOLT 12 invoice offer_id (Merkle root of offer-range TLVs 2–22) does not match " +
                     "the original offer — the invoice was not generated from this offer.");
         }
+
+        if (!anyCheckPerformed)
+            throw new InvalidOperationException(
+                "BOLT 12 offer has no verifiable fields (no issuer_id, no blinded paths, " +
+                "no offer-range TLVs) — cannot confirm invoice authenticity.");
     }
 
     /// <summary>
@@ -475,17 +487,25 @@ internal static class Bolt12InvoiceParser
     /// </summary>
     internal static ulong ReadBigSize(byte[] data, ref int pos)
     {
+        if (pos >= data.Length)
+            throw new FormatException("Truncated BigSize: no bytes remaining.");
         var b = data[pos++];
         return b switch
         {
             <= 0xFC => b,
-            0xFD => (ulong)data[pos++] << 8 | data[pos++],
-            0xFE => (ulong)data[pos++] << 24 | (ulong)data[pos++] << 16
-                    | (ulong)data[pos++] << 8 | data[pos++],
-            _ => (ulong)data[pos++] << 56 | (ulong)data[pos++] << 48
-                 | (ulong)data[pos++] << 40 | (ulong)data[pos++] << 32
-                 | (ulong)data[pos++] << 24 | (ulong)data[pos++] << 16
-                 | (ulong)data[pos++] << 8 | data[pos++]
+            0xFD => pos + 2 <= data.Length
+                ? (ulong)data[pos++] << 8 | data[pos++]
+                : throw new FormatException("Truncated BigSize (expected 2 more bytes)."),
+            0xFE => pos + 4 <= data.Length
+                ? (ulong)data[pos++] << 24 | (ulong)data[pos++] << 16
+                  | (ulong)data[pos++] << 8 | data[pos++]
+                : throw new FormatException("Truncated BigSize (expected 4 more bytes)."),
+            _ => pos + 8 <= data.Length
+                ? (ulong)data[pos++] << 56 | (ulong)data[pos++] << 48
+                  | (ulong)data[pos++] << 40 | (ulong)data[pos++] << 32
+                  | (ulong)data[pos++] << 24 | (ulong)data[pos++] << 16
+                  | (ulong)data[pos++] << 8 | data[pos++]
+                : throw new FormatException("Truncated BigSize (expected 8 more bytes).")
         };
     }
 

@@ -103,6 +103,8 @@ internal class BoltzSwapService(BoltzClient boltzClient, IClientTransport client
         string currency = "BTC",
         CancellationToken cancellationToken = default)
     {
+        if (amountSats <= 0)
+            throw new ArgumentOutOfRangeException(nameof(amountSats), amountSats, "Amount must be positive.");
         if (!Bolt12InvoiceParser.IsBolt12Offer(offer))
             throw new ArgumentException(
                 $"Expected a BOLT 12 offer (lno1…), got: '{offer[..Math.Min(8, offer.Length)]}…'",
@@ -149,7 +151,8 @@ internal class BoltzSwapService(BoltzClient boltzClient, IClientTransport client
                 $"Address mismatch — expected {address.ToString(operatorTerms.Network.ChainName == ChainName.Mainnet)}, " +
                 $"Boltz returned {response.Address}");
 
-        return new SubmarineSwapResult(vhtlcContract, response, address, fetchResponse.Invoice);
+        var paymentHashHex = Convert.ToHexString(paymentHashBytes).ToLowerInvariant();
+        return new SubmarineSwapResult(vhtlcContract, response, address, fetchResponse.Invoice, paymentHashHex);
     }
 
     // Reverse Swaps

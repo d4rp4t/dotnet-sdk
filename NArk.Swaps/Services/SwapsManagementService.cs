@@ -175,62 +175,12 @@ public class SwapsManagementService : IAsyncDisposable
         var swap = await boltz.BoltzService.CreateSubmarineSwap(invoice,
             await addressProvider!.GetNextSigningDescriptor(cancellationToken),
             cancellationToken);
-        await _contractService.ImportContract(walletId, swap.Contract,
-            ContractActivityState.AwaitingFundsBeforeDeactivate,
-            metadata: new Dictionary<string, string> { ["Source"] = $"swap:{swap.Swap.Id}" },
-            cancellationToken: cancellationToken);
-        await _swapsStorage.SaveSwap(
-            walletId,
-            new ArkSwap(
-                swap.Swap.Id,
-                walletId,
-                ArkSwapType.Submarine,
-                invoice.ToString(),
-                swap.Swap.ExpectedAmount,
-                swap.Contract.GetArkAddress().ScriptPubKey.ToHex(),
-                swap.Address.ToString(serverInfo.Network.ChainName == ChainName.Mainnet),
-                ArkSwapStatus.Pending,
-                null,
-                DateTimeOffset.UtcNow,
-                DateTimeOffset.UtcNow,
-                invoice.Hash.ToString()
-            )
-            {
-                ProviderId = BoltzSwapProvider.Id,
-                Route = new SwapRoute(SwapAsset.ArkBtc, SwapAsset.BtcLightning)
-            }, cancellationToken);
-        try
-        {
-            return autoPay
-                ? (await _spendingService.Spend(walletId,
-                    [new ArkTxOut(ArkTxOutType.Vtxo, swap.Swap.ExpectedAmount, swap.Address)], cancellationToken))
-                .ToString()
-                : swap.Swap.Id;
-        }
-        catch (Exception e)
-        {
-            await _swapsStorage.SaveSwap(
-                walletId,
-                new ArkSwap(
-                    swap.Swap.Id,
-                    walletId,
-                    ArkSwapType.Submarine,
-                    invoice.ToString(),
-                    swap.Swap.ExpectedAmount,
-                    swap.Contract.GetArkAddress().ScriptPubKey.ToHex(),
-                    swap.Address.ToString(serverInfo.Network.ChainName == ChainName.Mainnet),
-                    ArkSwapStatus.Failed,
-                    e.ToString(),
-                    DateTimeOffset.UtcNow,
-                    DateTimeOffset.UtcNow,
-                    invoice.Hash.ToString()
-                )
-                {
-                    ProviderId = BoltzSwapProvider.Id,
-                    Route = new SwapRoute(SwapAsset.ArkBtc, SwapAsset.BtcLightning)
-                }, cancellationToken);
-            throw;
-        }
+        return await SaveAndFundSubmarineSwap(
+            walletId, swap.Contract, swap.Swap.Id, invoice.ToString(),
+            swap.Swap.ExpectedAmount, swap.Address,
+            invoice.Hash.ToString(),
+            serverInfo.Network.ChainName == ChainName.Mainnet,
+            autoPay, cancellationToken);
     }
 
     /// <summary>
@@ -289,67 +239,60 @@ public class SwapsManagementService : IAsyncDisposable
 
         var invoiceStr = swap.Invoice
             ?? throw new InvalidOperationException("BOLT 12 submarine swap did not return an invoice string");
+        var paymentHashHex = swap.PaymentHashHex
+            ?? throw new InvalidOperationException("BOLT 12 submarine swap did not return a payment hash");
 
-        var paymentHashBytes = Bolt12InvoiceParser.ExtractPaymentHash(invoiceStr);
-        var paymentHashHex = Convert.ToHexString(paymentHashBytes).ToLowerInvariant();
+        return await SaveAndFundSubmarineSwap(
+            walletId, swap.Contract, swap.Swap.Id, invoiceStr,
+            swap.Swap.ExpectedAmount, swap.Address,
+            paymentHashHex,
+            serverInfo.Network.ChainName == ChainName.Mainnet,
+            autoPay, cancellationToken);
+    }
 
-        await _contractService.ImportContract(walletId, swap.Contract,
+    private async Task<string> SaveAndFundSubmarineSwap(
+        string walletId,
+        VHTLCContract contract,
+        string swapId,
+        string invoiceStr,
+        long expectedAmount,
+        ArkAddress lockupAddress,
+        string paymentHashHex,
+        bool isMainnet,
+        bool autoPay,
+        CancellationToken cancellationToken)
+    {
+        await _contractService.ImportContract(walletId, contract,
             ContractActivityState.AwaitingFundsBeforeDeactivate,
-            metadata: new Dictionary<string, string> { ["Source"] = $"swap:{swap.Swap.Id}" },
+            metadata: new Dictionary<string, string> { ["Source"] = $"swap:{swapId}" },
             cancellationToken: cancellationToken);
 
-        var isMainnet = serverInfo.Network.ChainName == ChainName.Mainnet;
-        await _swapsStorage.SaveSwap(
-            walletId,
+        ArkSwap BuildSwap(ArkSwapStatus status, string? failReason = null) =>
             new ArkSwap(
-                swap.Swap.Id,
-                walletId,
-                ArkSwapType.Submarine,
-                invoiceStr,
-                swap.Swap.ExpectedAmount,
-                swap.Contract.GetArkAddress().ScriptPubKey.ToHex(),
-                swap.Address.ToString(isMainnet),
-                ArkSwapStatus.Pending,
-                null,
-                DateTimeOffset.UtcNow,
-                DateTimeOffset.UtcNow,
-                paymentHashHex
-            )
+                swapId, walletId, ArkSwapType.Submarine, invoiceStr, expectedAmount,
+                contract.GetArkAddress().ScriptPubKey.ToHex(),
+                lockupAddress.ToString(isMainnet),
+                status, failReason,
+                DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+                paymentHashHex)
             {
                 ProviderId = BoltzSwapProvider.Id,
                 Route = new SwapRoute(SwapAsset.ArkBtc, SwapAsset.BtcLightning)
-            }, cancellationToken);
+            };
+
+        await _swapsStorage.SaveSwap(walletId, BuildSwap(ArkSwapStatus.Pending), cancellationToken);
 
         try
         {
             return autoPay
                 ? (await _spendingService.Spend(walletId,
-                    [new ArkTxOut(ArkTxOutType.Vtxo, swap.Swap.ExpectedAmount, swap.Address)],
+                    [new ArkTxOut(ArkTxOutType.Vtxo, expectedAmount, lockupAddress)],
                     cancellationToken)).ToString()
-                : swap.Swap.Id;
+                : swapId;
         }
         catch (Exception e)
         {
-            await _swapsStorage.SaveSwap(
-                walletId,
-                new ArkSwap(
-                    swap.Swap.Id,
-                    walletId,
-                    ArkSwapType.Submarine,
-                    invoiceStr,
-                    swap.Swap.ExpectedAmount,
-                    swap.Contract.GetArkAddress().ScriptPubKey.ToHex(),
-                    swap.Address.ToString(isMainnet),
-                    ArkSwapStatus.Failed,
-                    e.ToString(),
-                    DateTimeOffset.UtcNow,
-                    DateTimeOffset.UtcNow,
-                    paymentHashHex
-                )
-                {
-                    ProviderId = BoltzSwapProvider.Id,
-                    Route = new SwapRoute(SwapAsset.ArkBtc, SwapAsset.BtcLightning)
-                }, cancellationToken);
+            await _swapsStorage.SaveSwap(walletId, BuildSwap(ArkSwapStatus.Failed, e.ToString()), cancellationToken);
             throw;
         }
     }

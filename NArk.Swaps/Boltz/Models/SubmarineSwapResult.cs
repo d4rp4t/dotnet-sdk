@@ -20,4 +20,5 @@ public record SubmarineSwapResult(
     VHTLCContract Contract,
     SubmarineResponse Swap,
     ArkAddress Address,
-    string? Invoice = null);
+    string? Invoice = null,
+    string? PaymentHashHex = null);
