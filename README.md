@@ -114,7 +114,24 @@ NArk.Storage.EfCore (optional, provider-agnostic persistence)
 
 ## Wallet Management
 
-The SDK supports two wallet types:
+Wallets are described along two orthogonal axes; capability is answered by the provider, not by a tag on the data.
+
+**Key derivation** (`WalletType`):
+
+| `WalletType` | Script shape | Use case |
+| --- | --- | --- |
+| `HD` | `tr([fp/path]xpub/0/*)` | Per-contract derivation, boarding support |
+| `SingleKey` | `tr(pubkey)` | Static key, simple integrations |
+
+**Signing capability** — decided at `IWalletProvider.GetSignerAsync` time:
+
+| `ArkWalletInfo.Secret` | `IRemoteSignerTransport.KnowsWalletAsync` | Returns | Meaning |
+| --- | --- | --- | --- |
+| non-empty | — | local signer | sign locally |
+| null/empty | `true` | `RemoteArkadeWalletSigner` proxy | sign via transport |
+| null/empty | `false` (or no transport) | `null` | watch-only |
+
+Any combination of the two axes is valid — a watch-only `HD`, a remote-signed `SingleKey`, etc.
 
 **HD Wallets** — BIP-39 mnemonic with BIP-86 taproot derivation (`m/86'/cointype'/0'`):
 
@@ -135,6 +152,30 @@ var wallet = await WalletFactory.CreateWallet(
     destination: null,
     serverInfo);
 // wallet.WalletType == WalletType.SingleKey
+```
+
+**Watch-Only and Remote-Signed Wallets** — same data shape (`Secret = null` on a normal `ArkWalletInfo`); the runtime distinction is made by whether an `IRemoteSignerTransport` is registered and claims the wallet:
+
+```csharp
+// Build the wallet record once. WalletType is inferred from the descriptor shape
+// (wildcard → HD, bare → SingleKey).
+var wallet = await WalletFactory.CreateWatchOnlyWallet(
+    accountDescriptor: "tr([abcd1234/86'/1'/0']tpub.../0/*)",
+    destination: null,
+    serverInfo);
+// wallet.WalletType == WalletType.HD, wallet.Secret == null
+await walletStorage.SaveWallet(wallet);
+
+// To make the same wallet remote-signed instead of watch-only, register an
+// IRemoteSignerTransport whose KnowsWalletAsync returns true for wallet.Id:
+public class MyRemoteSignerTransport : IRemoteSignerTransport
+{
+    public Task<bool> KnowsWalletAsync(string walletId, CancellationToken ct) => _bridge.IsPairedAsync(walletId, ct);
+    // … sign methods …
+}
+services.AddSingleton<IRemoteSignerTransport, MyRemoteSignerTransport>();
+// GetSignerAsync now returns a RemoteArkadeWalletSigner for that walletId,
+// instead of null. Same data; different signer-source.
 ```
 
 Save and load wallets through `IWalletStorage`:
