@@ -1,7 +1,5 @@
 using NArk.Core.Services;
-using NArk.Core.Sweeper;
 using NArk.Swaps.Services;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace NArk.Wallet.Client.Services;
 
@@ -28,8 +26,14 @@ public static class ArkServiceStartup
         var intentGen = services.GetRequiredService<IntentGenerationService>();
         await intentGen.StartAsync(cts.Token);
 
-        var vtxoSync = services.GetRequiredService<VtxoSynchronizationService>();
-        await vtxoSync.StartAsync(cts.Token);
+        // Non-fatal if server subscription endpoint is unavailable (e.g. 500/501) —
+        // VtxoSynchronizationService will fall back to routine polling.
+        try
+        {
+            var vtxoSync = services.GetRequiredService<VtxoSynchronizationService>();
+            await vtxoSync.StartAsync(cts.Token);
+        }
+        catch { /* Server subscription unavailable — VTXO sync will poll */ }
 
         // Start swap management (monitors swap status, handles claims).
         // Non-fatal if Boltz is unreachable — swaps just won't be monitored until next app load.

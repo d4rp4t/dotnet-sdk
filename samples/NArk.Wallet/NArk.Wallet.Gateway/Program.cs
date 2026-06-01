@@ -5,7 +5,7 @@ var app = builder.Build();
 app.Use(async (ctx, next) =>
 {
     ctx.Response.Headers["Cross-Origin-Opener-Policy"] = "same-origin";
-    ctx.Response.Headers["Cross-Origin-Embedder-Policy"] = "require-corp";
+    ctx.Response.Headers["Cross-Origin-Embedder-Policy"] = "credentialless";
     await next();
 });
 
