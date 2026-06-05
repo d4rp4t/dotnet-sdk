@@ -251,6 +251,95 @@ public static class DockerHelper
     }
 
     /// <summary>
+    /// Returns the output index (vout) of the first output in <paramref name="txid"/>
+    /// whose address matches <paramref name="address"/>. Requires the transaction to be
+    /// a wallet transaction or txindex to be enabled on the Bitcoin Core node.
+    /// </summary>
+    public static async Task<int> BitcoinGetTxVout(string txid, string address, CancellationToken ct = default)
+    {
+        var json = await BitcoinCli(["getrawtransaction", txid, "1"], ct);
+        using var doc = JsonDocument.Parse(json);
+        foreach (var vout in doc.RootElement.GetProperty("vout").EnumerateArray())
+        {
+            var scriptPubKey = vout.GetProperty("scriptPubKey");
+            if (scriptPubKey.TryGetProperty("address", out var addrEl) && addrEl.GetString() == address)
+                return vout.GetProperty("n").GetInt32();
+        }
+        throw new InvalidOperationException($"Address {address} not found in outputs of tx {txid}");
+    }
+
+    /// <summary>
+    /// Forces a BTC→ARK chain swap into <c>swap.expired</c> and sets the
+    /// BTC-side lockup transaction ID in Boltz's DB so the cooperative refund
+    /// path can retrieve the lockup tx hex from Boltz's status response after
+    /// a restart. Mirrors <see cref="SetArkToBtcChainSwapExpiredWithLockup"/>
+    /// for the opposite direction.
+    /// </summary>
+    /// <param name="swapId">Boltz swap ID.</param>
+    /// <param name="lockupTxid">txid of the BTC transaction that funded the lockup address.</param>
+    /// <param name="lockupVout">Output index of the lockup output within that transaction.</param>
+    public static async Task SetBtcToArkChainSwapExpiredWithLockup(
+        string swapId, string lockupTxid, int lockupVout, CancellationToken ct = default)
+    {
+        await Cli.Wrap("docker")
+            .WithArguments([
+                "exec", Container.Postgres,
+                "psql", "-U", "postgres", "-d", "boltz",
+                "-c", $"UPDATE \"chainSwaps\" SET status = '{ChainSwapStatus.SwapExpired}' WHERE id = '{swapId}'"
+            ])
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(ct);
+
+        // Setting transactionId+transactionVout for symbol='BTC' ensures Boltz includes
+        // the lockup tx hex in the swap.expired status response after restart — without
+        // this, CoopRefundBtcToArkChainSwap cannot find the outpoint to spend.
+        await Cli.Wrap("docker")
+            .WithArguments([
+                "exec", Container.Postgres,
+                "psql", "-U", "postgres", "-d", "boltz",
+                "-c", $"UPDATE \"chainSwapData\" SET \"transactionId\" = '{lockupTxid}', \"transactionVout\" = {lockupVout} WHERE \"swapId\" = '{swapId}' AND symbol = 'BTC'"
+            ])
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(ct);
+
+        await RestartBoltzAndWait(ct);
+    }
+
+    /// <summary>
+    /// Forces an ARK→BTC chain swap into <c>swap.expired</c> and manually sets the
+    /// ARK-side lockup transaction ID in Boltz's DB — bypassing the normal swap flow.
+    /// Call this while Boltz is already stopped; the method updates the DB and then
+    /// starts Boltz and waits for it to be healthy.
+    /// </summary>
+    /// <param name="swapId">Boltz swap ID.</param>
+    /// <param name="lockupTxid">txid of the ARK VTXO at the VHTLC (from arkd).</param>
+    /// <param name="lockupVout">Output index of the VTXO within that virtual tx.</param>
+    public static async Task SetArkToBtcChainSwapExpiredWithLockup(
+        string swapId, string lockupTxid, int lockupVout, CancellationToken ct = default)
+    {
+        await Cli.Wrap("docker")
+            .WithArguments([
+                "exec", Container.Postgres,
+                "psql", "-U", "postgres", "-d", "boltz",
+                "-c", $"UPDATE \"chainSwaps\" SET status = '{ChainSwapStatus.SwapExpired}' WHERE id = '{swapId}'"
+            ])
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(ct);
+
+        await Cli.Wrap("docker")
+            .WithArguments([
+                "exec", Container.Postgres,
+                "psql", "-U", "postgres", "-d", "boltz",
+                "-c", $"UPDATE \"chainSwapData\" SET \"transactionId\" = '{lockupTxid}', \"transactionVout\" = {lockupVout} WHERE \"swapId\" = '{swapId}' AND symbol = 'ARK'"
+            ])
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(ct);
+
+        await StartContainer(Container.Boltz, ct);
+        await RestartBoltzAndWait(ct);
+    }
+
+    /// <summary>
     /// Restarts the Boltz container and waits until its REST API is healthy
     /// and the ARK/BTC chain pairs are loaded. Use after a direct DB status
     /// update so Boltz's in-memory nursery picks up the new swap state.
@@ -281,19 +370,21 @@ public static class DockerHelper
 
         throw new InvalidOperationException("Boltz did not become healthy within 120 s after restart");
     }
+    
+    /// <summary>Docker container names used by the denigiri regtest stack.</summary>
+    internal static class Container
+    {
+        public const string Bitcoin = "bitcoin";
+        public const string Boltz = "boltz";
+        public const string Lnd = "lnd";
+        public const string BoltzLnd = "boltz-lnd";
+        public const string Arkd = "arkd";
+        public const string Fulmine = "boltz-fulmine";
+        public const string Postgres = "postgres";
+    }
 }
 
-/// <summary>Docker container names used by the denigiri regtest stack.</summary>
-public static class Container
-{
-    public const string Bitcoin = "bitcoin";
-    public const string Boltz = "boltz";
-    public const string Lnd = "lnd";
-    public const string BoltzLnd = "boltz-lnd";
-    public const string Arkd = "arkd";
-    public const string Fulmine = "boltz-fulmine";
-    public const string Postgres = "postgres";
-}
+
 
 /// <summary>
 /// Boltz chain swap status strings as emitted on the WebSocket and REST API.
