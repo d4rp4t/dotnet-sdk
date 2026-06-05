@@ -590,22 +590,26 @@ public class BoltzSwapProvider : ISwapProvider
                 // returned. We ask Boltz for a new quote based on the actual
                 // funded amount and accept it; if Boltz agrees the swap
                 // continues with the renegotiated amount. If Boltz refuses
-                // (amount outside limits etc.) we fall through to the refund
-                // path below. Mirrors arkade-os/boltz-swap's `quoteSwap`.
+                // (amount outside limits etc.) the swap stays Pending — the
+                // user's BTC is still locked and will be returned by Boltz
+                // on-chain once the timelock elapses (swap.expired path below).
+                // Mirrors arkade-os/boltz-swap's `quoteSwap`.
                 if ((swap.SwapType is ArkSwapType.ChainBtcToArk or ArkSwapType.ChainArkToBtc) &&
                     (swap.Status is not (ArkSwapStatus.Settled or ArkSwapStatus.Refunded)) &&
                     swapStatus.Status == "transaction.lockupFailed")
                 {
                     if (await TryRenegotiateChainSwap(swap, cancellationToken))
                     {
-                        // Boltz accepted the new quote — let the next poll
-                        // observe the renegotiated swap making progress.
                         continue;
                     }
-                    // Renegotiation refused — fall through to refund.
+                    // Renegotiation refused — stay Pending until swap.expired.
+                    // Per boltz-swap TS SDK, BTC lockup refunds for BTC→ARK are
+                    // handled on-chain by Boltz after the timelock; no client
+                    // action is required or possible here.
+                    continue;
                 }
 
-                // If not refunded and status is refundable, start a coop refund
+                // Submarine cooperative refund
                 if (swap.SwapType is ArkSwapType.Submarine && swap.Status is not ArkSwapStatus.Refunded &&
                     IsRefundableStatus(swapStatus.Status))
                 {
@@ -614,45 +618,46 @@ public class BoltzSwapProvider : ISwapProvider
                     var newSwap =
                         swap with { Status = ArkSwapStatus.Failed, UpdatedAt = DateTimeOffset.Now };
                     await RequestRefundCooperatively(newSwap, cancellationToken);
-                    // Don't map status to Failed below — if refund succeeded, status is already
-                    // Refunded in storage; if it returned early (e.g. VTXOs not yet available
-                    // due to batch round race), keep the swap Pending so routine polls retry.
                     continue;
                 }
 
-                // Chain swap cooperative refund: refundable status (after the
-                // renegotiation attempt above already failed or this swap is
-                // outright expired) means the user's locked funds need to come
-                // back. BTC→ARK refunds the BTC lockup; ARK→BTC refunds the
-                // Ark VHTLC. Both paths are best-effort — failure (Boltz
-                // refuses, lockup not yet visible) keeps the swap Pending so
-                // the routine poll retries, EXCEPT when Boltz reported
-                // `swap.expired` and there's no lockup observable: at that
-                // point the swap is dead and there's nothing to refund, so
-                // we transition to Failed so callers can stop polling.
+                // Chain swap cooperative refund — only on swap.expired.
+                //
+                // ARK→BTC (from=ARK): user locked ARK in a VHTLC; we cooperatively
+                // spend it back via POST /v2/swap/chain/{id}/refund/ark.
+                //
+                // BTC→ARK (from=BTC): the BTC lockup is refunded on-chain by Boltz
+                // after the timelock elapses — there is no client-side action.
+                // Per arkade-os/boltz-swap TS SDK: "BTC-side lockup refunds are
+                // handled on-chain by Boltz after the timelock expires."
+                // We attempt a MuSig2 cooperative refund as an optimisation (saves
+                // the user from waiting for the full timelock); if Boltz refuses
+                // (e.g. the lockup tx isn't visible yet) we leave the swap Pending
+                // so the routine poll retries.
                 if ((swap.SwapType is ArkSwapType.ChainBtcToArk or ArkSwapType.ChainArkToBtc) &&
                     (swap.Status is not (ArkSwapStatus.Settled or ArkSwapStatus.Refunded)) &&
-                    IsRefundableStatus(swapStatus.Status))
+                    IsChainRefundableStatus(swapStatus.Status))
                 {
-                    _logger?.LogInformation("Swap {SwapId}: Boltz status '{BoltzStatus}' is refundable for {SwapType}, attempting cooperative refund",
-                        idToPoll, swapStatus.Status, swap.SwapType);
+                    _logger?.LogInformation(
+                        "Swap {SwapId}: chain swap expired ({SwapType}), attempting cooperative refund",
+                        idToPoll, swap.SwapType);
+
                     var refunded = swap.SwapType is ArkSwapType.ChainBtcToArk
                         ? await CoopRefundBtcToArkChainSwap(swap, cancellationToken)
                         : await CoopRefundArkToBtcChainSwap(swap, cancellationToken);
                     if (refunded) continue;
 
-                    // Refund didn't succeed. If Boltz says `swap.expired`
-                    // and there are no funds at the lockup, the swap is
-                    // dead-with-nothing-to-recover — mark Failed so the
-                    // routine poll stops retrying and the caller can move on.
+                    // Refund attempt failed. If there is nothing to recover
+                    // (no lockup observable on either side) mark Failed so
+                    // the poll stops retrying.
                     var noBtcLockup = string.IsNullOrEmpty(swapStatus.Transaction?.Hex);
                     var noArkLockup = swap.SwapType == ArkSwapType.ChainArkToBtc
                         && (await _vtxoStorage.GetVtxos(scripts: [swap.ContractScript], cancellationToken: cancellationToken)).Count == 0;
                     var nothingToRefund = swap.SwapType == ArkSwapType.ChainBtcToArk ? noBtcLockup : noArkLockup;
-                    if (swapStatus.Status == "swap.expired" && nothingToRefund)
+                    if (nothingToRefund)
                     {
                         _logger?.LogInformation(
-                            "Swap {SwapId}: expired with no observable lockup — marking Failed (no funds to recover)",
+                            "Swap {SwapId}: expired with no observable lockup — marking Failed",
                             idToPoll);
                         var failedSwap = swap with
                         {
@@ -663,8 +668,6 @@ public class BoltzSwapProvider : ISwapProvider
                         await _swapsStorage.SaveSwap(swap.WalletId, failedSwap, cancellationToken);
                         RaiseSwapStatusChanged(failedSwap, failedSwap.FailReason);
                     }
-                    // Otherwise leave Pending so the next routine poll retries
-                    // the refund — the lockup might just not be visible yet.
                     continue;
                 }
 
@@ -1340,6 +1343,16 @@ public class BoltzSwapProvider : ISwapProvider
             _ => false
         };
     }
+
+    /// <summary>
+    /// For chain swaps (ARK↔BTC), only <c>swap.expired</c> triggers a
+    /// client-side cooperative refund. <c>invoice.failedToPay</c> and
+    /// <c>transaction.lockupFailed</c> are submarine/renegotiation statuses —
+    /// not valid refund triggers for chain swaps. Mirrors
+    /// <c>isChainRefundableStatus</c> in <c>arkade-os/boltz-swap</c> TS SDK.
+    /// </summary>
+    private static bool IsChainRefundableStatus(string status) =>
+        status == "swap.expired";
 
     private static bool IsChainSwapClaimableStatus(string status)
     {

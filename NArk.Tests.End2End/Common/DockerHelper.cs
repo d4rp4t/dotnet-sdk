@@ -61,19 +61,11 @@ public static class DockerHelper
         => await Exec(Container.Bitcoin, [.. BitcoinCliArgs, "-generate", count.ToString()], ct);
 
     /// <summary>
-    /// Drives a Boltz swap into a specific status on demand via the
-    /// boltzr-cli admin tool baked into the Boltz container. Only
-    /// <c>invoice.failedToPay</c> and <c>invoice.pending</c> are accepted —
-    /// any other value throws on the Boltz side.
+    /// Drives a Boltz submarine swap into a specific status via
+    /// <c>boltzr-cli swap set-status</c>. Use <see cref="SubmarineSwapStatus"/> constants
+    /// for the <paramref name="status"/> argument. For chain swaps use
+    /// <see cref="TrySetBoltzSwapStatus"/> which falls back to a direct DB update.
     /// </summary>
-    /// <remarks>
-    /// Setting <c>invoice.failedToPay</c> writes the swap's failure reason
-    /// to "payment has been cancelled" and fires the same nursery event +
-    /// websocket update the production failure path emits, so an SDK
-    /// listening to the websocket sees an indistinguishable
-    /// <c>invoice.failedToPay</c> and follows its cooperative-refund flow.
-    /// Source: <c>BoltzExchange/boltz-backend lib/service/Service.ts</c>.
-    /// </remarks>
     public static async Task SetBoltzSwapStatus(string swapId, string status, CancellationToken ct = default)
     {
         var result = await Cli.Wrap("docker")
@@ -205,18 +197,21 @@ public static class DockerHelper
     }
 
     /// <summary>
-    /// Attempts to force any Boltz swap (including chain swaps) into
-    /// <paramref name="status"/> via <c>boltzr-cli swap set-status</c>.
-    /// Returns <c>true</c> on success; <c>false</c> when the CLI exits non-zero
-    /// (e.g. the running Boltz build does not support forcing that status on
-    /// chain swaps). Use this instead of <see cref="SetBoltzSwapStatus"/> when
-    /// you want to gracefully skip a test rather than fail it if status forcing
-    /// turns out to be unavailable.
+    /// Forces a Boltz swap into <paramref name="status"/> using the best
+    /// available method. Use <see cref="SubmarineSwapStatus"/> or <see cref="ChainSwapStatus"/>
+    /// constants for the <paramref name="status"/> argument.
+    /// <list type="number">
+    /// <item>Tries <c>boltzr-cli swap set-status</c> — works for submarine swaps.</item>
+    /// <item>Falls back to a direct <c>postgres</c> UPDATE on <c>"chainSwaps"</c>
+    /// — required for chain swaps because the CLI only resolves submarine IDs.</item>
+    /// </list>
+    /// Returns <c>true</c> when either path succeeded; <c>false</c> when both fail
+    /// (lets callers call <c>Assert.Ignore</c> instead of hard-failing).
     /// </summary>
     public static async Task<bool> TrySetBoltzSwapStatus(
         string swapId, string status, CancellationToken ct = default)
     {
-        var result = await Cli.Wrap("docker")
+        var cliResult = await Cli.Wrap("docker")
             .WithArguments([
                 "exec", Container.Boltz,
                 "/boltz-backend/target/release/boltzr-cli",
@@ -225,11 +220,66 @@ public static class DockerHelper
             ])
             .WithValidation(CommandResultValidation.None)
             .ExecuteBufferedAsync(ct);
-        if (!result.IsSuccess)
+
+        if (cliResult.IsSuccess) return true;
+
+        // boltzr-cli only resolves submarine swap IDs — chain swaps live in
+        // "chainSwaps". Update the DB directly, then restart Boltz so its
+        // in-memory nursery re-reads the new state from postgres. Without the
+        // restart Boltz refuses cooperative refund requests because its nursery
+        // still holds the old status in memory.
+        var dbResult = await Cli.Wrap("docker")
+            .WithArguments([
+                "exec", Container.Postgres,
+                "psql", "-U", "postgres", "-d", "boltz",
+                "-c", $"UPDATE \"chainSwaps\" SET status = '{status}' WHERE id = '{swapId}'"
+            ])
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(ct);
+
+        if (!dbResult.IsSuccess || !dbResult.StandardOutput.Contains("UPDATE 1"))
+        {
             Console.WriteLine(
-                $"[DockerHelper] TrySetBoltzSwapStatus {swapId}→{status} failed " +
-                $"(exit={result.ExitCode}): {result.StandardError.Trim()}");
-        return result.IsSuccess;
+                $"[DockerHelper] TrySetBoltzSwapStatus {swapId}→{status} failed on both paths. " +
+                $"CLI: {cliResult.StandardError.Trim()} | " +
+                $"DB: {dbResult.StandardOutput.Trim()} {dbResult.StandardError.Trim()}");
+            return false;
+        }
+
+        await RestartBoltzAndWait(ct);
+        return true;
+    }
+
+    /// <summary>
+    /// Restarts the Boltz container and waits until its REST API is healthy
+    /// and the ARK/BTC chain pairs are loaded. Use after a direct DB status
+    /// update so Boltz's in-memory nursery picks up the new swap state.
+    /// </summary>
+    public static async Task RestartBoltzAndWait(CancellationToken ct = default)
+    {
+        Console.WriteLine("[DockerHelper] Restarting Boltz container...");
+        await StopContainer(Container.Boltz, ct);
+        await Task.Delay(TimeSpan.FromSeconds(2), ct);
+        await StartContainer(Container.Boltz, ct);
+
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        for (var i = 1; i <= 60; i++)
+        {
+            try
+            {
+                var resp = await http.GetAsync("http://localhost:9069/v2/swap/chain", ct);
+                if (resp.IsSuccessStatusCode)
+                {
+                    Console.WriteLine($"[DockerHelper] Boltz ready (attempt {i})");
+                    return;
+                }
+            }
+            catch { /* not up yet */ }
+
+            if (i < 60) await Task.Delay(TimeSpan.FromSeconds(2), ct);
+        }
+
+        throw new InvalidOperationException("Boltz did not become healthy within 120 s after restart");
     }
 }
 
@@ -242,32 +292,25 @@ public static class Container
     public const string BoltzLnd = "boltz-lnd";
     public const string Arkd = "arkd";
     public const string Fulmine = "boltz-fulmine";
+    public const string Postgres = "postgres";
 }
 
 /// <summary>
-/// Boltz swap status strings as emitted on the WebSocket and REST API.
+/// Boltz chain swap status strings as emitted on the WebSocket and REST API.
 /// Use these constants instead of raw string literals so a Boltz API rename
 /// shows up as a single compile-time change.
 /// </summary>
-public static class BoltzStatus
+public static class ChainSwapStatus
 {
     public const string SwapCreated = "swap.created";
-    public const string SwapExpired = "swap.expired";
-
-    public const string InvoiceSet = "invoice.set";
-    public const string InvoicePending = "invoice.pending";
-    public const string InvoiceFailedToPay = "invoice.failedToPay";
-    public const string InvoiceExpired = "invoice.expired";
-    public const string InvoiceSettled = "invoice.settled";
-
-    public const string TransactionMempool = "transaction.mempool";
-    public const string TransactionConfirmed = "transaction.confirmed";
-    public const string TransactionFailed = "transaction.failed";
-    public const string TransactionRefunded = "transaction.refunded";
-    public const string TransactionClaimed = "transaction.claimed";
-
-    public const string TransactionLockupFailed = "transaction.lockupFailed";
-    public const string TransactionServerMempool = "transaction.server.mempool";
-    public const string TransactionServerConfirmed = "transaction.server.confirmed";
-    public const string TransactionClaimPending = "transaction.claim.pending";
+    public const string TransactionMempool = "transaction.mempool";                   // user's lockup in mempool
+    public const string TransactionConfirmed = "transaction.confirmed";               // user's lockup confirmed
+    public const string TransactionServerMempool = "transaction.server.mempool";      // cooperative claim
+    public const string TransactionServerConfirmed = "transaction.server.confirmed";  // cooperative claim
+    public const string TransactionClaimPending = "transaction.claim.pending";        // cooperative claim
+    public const string TransactionClaimed = "transaction.claimed";                   // terminal — claim confirmed
+    public const string TransactionLockupFailed = "transaction.lockupFailed";         // cooperative refund (or renegotiate via quote endpoint)
+    public const string SwapExpired = "swap.expired";                                 // cooperative refund
+    public const string TransactionFailed = "transaction.failed";                     // cooperative refund
+    public const string TransactionRefunded = "transaction.refunded";                 // terminal — refund confirmed
 }
