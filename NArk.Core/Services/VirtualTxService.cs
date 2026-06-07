@@ -68,22 +68,21 @@ public class VirtualTxService(
             if (txidsToFetch.Count > 0)
             {
                 var hexList = await transport.GetVirtualTxsAsync(txidsToFetch, cancellationToken);
-                if (hexList.Count == txidsToFetch.Count)
+                var hexByTxid = BuildHexByTxid(hexList);
+                if (hexByTxid.Count != txidsToFetch.Count)
                 {
-                    var hexByTxid = txidsToFetch
-                        .Zip(hexList, (id, hex) => (id, hex))
-                        .ToDictionary(t => t.id, t => t.hex);
-                    for (var i = 0; i < virtualTxs.Count; i++)
-                    {
-                        if (hexByTxid.TryGetValue(virtualTxs[i].Txid, out var hex))
-                            virtualTxs[i] = virtualTxs[i] with { Hex = hex };
-                    }
-                }
-                else
-                {
+                    // arkd omits hex for txs already confirmed on-chain. Those txs
+                    // will stay hex-null and be skipped at broadcast time after an
+                    // on-chain status check.
                     logger?.LogWarning(
                         "Virtual tx hex count mismatch for VTXO {Outpoint}: expected {Expected}, got {Actual}",
-                        vtxoOutpoint, txidsToFetch.Count, hexList.Count);
+                        vtxoOutpoint, txidsToFetch.Count, hexByTxid.Count);
+                }
+
+                for (var i = 0; i < virtualTxs.Count; i++)
+                {
+                    if (hexByTxid.TryGetValue(virtualTxs[i].Txid, out var hex))
+                        virtualTxs[i] = virtualTxs[i] with { Hex = hex };
                 }
             }
         }
@@ -141,24 +140,46 @@ public class VirtualTxService(
         var txids = missingHex.Select(tx => tx.Txid).ToList();
         var hexList = await transport.GetVirtualTxsAsync(txids, cancellationToken);
 
-        if (hexList.Count != txids.Count)
+        var hexByTxid = BuildHexByTxid(hexList);
+        if (hexByTxid.Count != txids.Count)
         {
             logger?.LogWarning(
                 "Hex count mismatch when populating VTXO {Outpoint}: expected {Expected}, got {Actual}",
-                vtxoOutpoint, txids.Count, hexList.Count);
+                vtxoOutpoint, txids.Count, hexByTxid.Count);
         }
 
-        // Update existing records with hex
-        var updates = new List<VirtualTx>();
-        for (var i = 0; i < Math.Min(txids.Count, hexList.Count); i++)
-        {
-            updates.Add(new VirtualTx(txids[i], hexList[i], missingHex[i].ExpiresAt));
-        }
+        var updates = missingHex
+            .Where(tx => hexByTxid.ContainsKey(tx.Txid))
+            .Select(tx => new VirtualTx(tx.Txid, hexByTxid[tx.Txid], tx.ExpiresAt))
+            .ToList();
 
         await storage.UpsertVirtualTxsAsync(updates, cancellationToken);
 
         logger?.LogInformation("Populated hex for {Count} virtual txs for VTXO {Outpoint}",
             updates.Count, vtxoOutpoint);
+    }
+
+    // Parse each hex, extract the txid from the PSBT's global transaction, and
+    // key the result by txid. This gives a correct mapping even when arkd returns
+    // fewer entries than requested (e.g. because some txs are already on-chain
+    // and omitted from GetVirtualTxs). A positional zip would silently assign
+    // the wrong hex to the wrong txid in that case.
+    private static Dictionary<string, string> BuildHexByTxid(IReadOnlyList<string> hexList)
+    {
+        var result = new Dictionary<string, string>(hexList.Count);
+        foreach (var hex in hexList)
+        {
+            try
+            {
+                var txid = PSBT.Parse(hex, Network.Main)
+                    .GetGlobalTransaction()
+                    .GetHash()
+                    .ToString();
+                result[txid] = hex;
+            }
+            catch { /* skip unparseable entries */ }
+        }
+        return result;
     }
 
     /// <summary>

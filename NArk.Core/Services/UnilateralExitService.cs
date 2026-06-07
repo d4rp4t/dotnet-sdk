@@ -66,14 +66,18 @@ public class UnilateralExitService(
 
             // Commitment txs are on-chain anchors; arkd never serves hex
             // for them via GetVirtualTxs, so a null hex on a Commitment
-            // row is expected. Only the off-chain rows (Tree / Ark /
-            // Checkpoint) need hex to be broadcastable.
-            var missingHex = branch.Any(tx =>
+            // row is expected. Non-commitment rows with null hex may be
+            // tree txs already confirmed on-chain (arkd omits their hex
+            // when they are no longer virtual). The broadcast phase checks
+            // on-chain status before requiring hex and skips confirmed rows.
+            var nullHexCount = branch.Count(tx =>
                 tx.Hex is null && tx.Type != ChainedTxType.Commitment);
-            if (missingHex)
+            if (nullHexCount > 0)
             {
-                logger?.LogError("Virtual tx branch for VTXO {Outpoint} has missing hex, cannot start exit", outpoint);
-                continue;
+                logger?.LogWarning(
+                    "Virtual tx branch for VTXO {Outpoint} has {Count} non-commitment entries " +
+                    "with missing hex; will verify on-chain status at broadcast time",
+                    outpoint, nullHexCount);
             }
 
             var session = new ExitSession(
@@ -425,15 +429,10 @@ public class UnilateralExitService(
                     continue;
                 }
 
-                if (vtx.Hex is null)
-                {
-                    await FailSession(session, $"Missing hex for virtual tx {vtx.Txid}", ct);
-                    return;
-                }
-
                 var txid = uint256.Parse(vtx.Txid);
 
-                // Check if already confirmed
+                // arkd omits hex for tree txs already on-chain; check on-chain
+                // status before requiring hex so confirmed txs are skipped cleanly.
                 var status = await blockchain.GetTxStatusAsync(txid, ct);
                 if (status.Confirmed)
                 {
@@ -451,6 +450,13 @@ public class UnilateralExitService(
                         NextTxIndex = i,
                         UpdatedAt = DateTimeOffset.UtcNow
                     }, ct);
+                    return;
+                }
+
+                if (vtx.Hex is null)
+                {
+                    await FailSession(session,
+                        $"Missing hex for virtual tx {vtx.Txid} (not on-chain either)", ct);
                     return;
                 }
 
