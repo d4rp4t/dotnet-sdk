@@ -8,27 +8,21 @@ public sealed class RgliStrategy : ICoinSelectionStrategy
     public SelectionStrategy Strategy => SelectionStrategy.RGLI;
 
     public SelectionResult? TrySelect(
-        IReadOnlyList<CoinCandidate> candidates,
+        IReadOnlyList<ExpiryBucket> buckets,
         SelectionContext context,
         CoinSelectionPolicy policy)
     {
-        var groups = candidates
-            .GroupBy(c => c.ExpiryGroup)
-            .OrderBy(g => g.Key)
-            .ToList();
-
         SelectionResult? best = null;
 
-        foreach (var group in groups)
+        foreach (var bucket in buckets)
         {
-            var coins = group.ToList();
-            var result = RunRgli(coins, context, policy, group.Key, expiryMixed: false);
+            var result = RunRgli(bucket.Coins, context, policy, bucket.ExpiryGroup, expiryMixed: false);
             best = PickBetter(best, result);
         }
 
         if (policy.AllowExpiryMixingFallback)
         {
-            var all = candidates.ToList();
+            var all = buckets.SelectMany(b => b.Coins).ToList();
             var mixed = RunRgli(all, context, policy, expiryGroup: 0u, expiryMixed: true);
             best = PickBetter(best, mixed);
         }
@@ -37,7 +31,7 @@ public sealed class RgliStrategy : ICoinSelectionStrategy
     }
 
     private static SelectionResult? RunRgli(
-        List<CoinCandidate> coins,
+        IReadOnlyList<CoinCandidate> coins,
         SelectionContext context,
         CoinSelectionPolicy policy,
         uint expiryGroup,
@@ -101,7 +95,7 @@ public sealed class RgliStrategy : ICoinSelectionStrategy
 
     private static SelectionResult LocalImprove(
         SelectionResult result,
-        List<CoinCandidate> allCoins,
+        IReadOnlyList<CoinCandidate> allCoins,
         SelectionContext context,
         CoinSelectionPolicy policy,
         uint expiryGroup,
@@ -113,7 +107,6 @@ public sealed class RgliStrategy : ICoinSelectionStrategy
         {
             var improved = false;
 
-            // try removing the smallest coin if total still covers target
             if (selected.Count > 1)
             {
                 var smallest = selected.MinBy(c => c.TxOut.Value)!;
@@ -131,7 +124,6 @@ public sealed class RgliStrategy : ICoinSelectionStrategy
                 }
             }
 
-            // try swapping a selected coin for a smaller unused coin that still covers target
             var selectedSet = selected.ToHashSet(ReferenceEqualityComparer.Instance);
             var unused = allCoins
                 .Where(c => !selectedSet.Contains(c.Coin))
@@ -146,7 +138,7 @@ public sealed class RgliStrategy : ICoinSelectionStrategy
                 foreach (var toRemove in selected.OrderByDescending(c => c.TxOut.Value))
                 {
                     if (candidate.Value >= toRemove.TxOut.Value)
-                        break; // swapping for bigger coin won't reduce change
+                        break;
 
                     var swappedTotal = currentTotal - toRemove.TxOut.Value + candidate.Value;
                     var swappedChange = swappedTotal - context.TargetAmount;

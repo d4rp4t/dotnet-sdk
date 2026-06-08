@@ -8,18 +8,13 @@ public sealed class ExpiryFirstStrategy : ICoinSelectionStrategy
     public SelectionStrategy Strategy => SelectionStrategy.ExpiryFirst;
 
     public SelectionResult? TrySelect(
-        IReadOnlyList<CoinCandidate> candidates,
+        IReadOnlyList<ExpiryBucket> buckets,
         SelectionContext context,
         CoinSelectionPolicy policy)
     {
-        var groups = candidates
-            .GroupBy(c => c.ExpiryGroup)
-            .OrderBy(g => g.Key);
-
-        foreach (var group in groups)
+        foreach (var bucket in buckets)
         {
-            var ordered = group.OrderByDescending(c => c.Value).ToList();
-            var result = GreedyWithinGroup(ordered, context, group.Key);
+            var result = GreedyWithinGroup(bucket.Coins, context, bucket.ExpiryGroup, expiryMixed: false);
             if (result is not null)
                 return result;
         }
@@ -27,15 +22,15 @@ public sealed class ExpiryFirstStrategy : ICoinSelectionStrategy
         if (!policy.AllowExpiryMixingFallback)
             return null;
 
-        var all = candidates.OrderByDescending(c => c.Value).ToList();
-        return GreedyWithinGroup(all, context, 0u, expiryMixed: true);
+        var all = buckets.SelectMany(b => b.Coins).OrderByDescending(c => c.Value).ToList();
+        return GreedyWithinGroup(all, context, expiryGroup: 0u, expiryMixed: true);
     }
 
     private static SelectionResult? GreedyWithinGroup(
-        List<CoinCandidate> coins,
+        IReadOnlyList<CoinCandidate> coins,
         SelectionContext context,
         uint expiryGroup,
-        bool expiryMixed = false)
+        bool expiryMixed)
     {
         var selected = new List<ArkCoin>();
         var total = Money.Zero;

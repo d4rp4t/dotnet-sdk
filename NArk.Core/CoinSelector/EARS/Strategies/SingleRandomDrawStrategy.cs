@@ -8,27 +8,23 @@ public sealed class SingleRandomDrawStrategy : ICoinSelectionStrategy
     public SelectionStrategy Strategy => SelectionStrategy.SRD;
 
     public SelectionResult? TrySelect(
-        IReadOnlyList<CoinCandidate> candidates,
+        IReadOnlyList<ExpiryBucket> buckets,
         SelectionContext context,
         CoinSelectionPolicy policy)
     {
-        var groups = candidates
-            .GroupBy(c => c.ExpiryGroup)
-            .OrderBy(g => g.Key);
-
-        foreach (var group in groups)
+        foreach (var bucket in buckets)
         {
-            if (group.Sum(c => c.Value) < context.TargetAmount)
+            if (bucket.TotalValue < context.TargetAmount)
                 continue;
 
-            var shuffled = group.OrderBy(_ => Random.Shared.Next()).ToList();
-            return Greedy(shuffled, context, group.Key, expiryMixed: false);
+            var shuffled = bucket.Coins.OrderBy(_ => Random.Shared.Next()).ToList();
+            return Greedy(shuffled, context, bucket.ExpiryGroup, expiryMixed: false);
         }
 
         if (!policy.AllowExpiryMixingFallback)
             return null;
 
-        var all = candidates.OrderBy(_ => Random.Shared.Next()).ToList();
+        var all = buckets.SelectMany(b => b.Coins).OrderBy(_ => Random.Shared.Next()).ToList();
         return Greedy(all, context, expiryGroup: 0u, expiryMixed: true);
     }
 

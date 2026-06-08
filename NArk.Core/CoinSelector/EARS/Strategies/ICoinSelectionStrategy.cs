@@ -4,7 +4,7 @@ public interface ICoinSelectionStrategy
 {
     SelectionStrategy Strategy { get; }
     SelectionResult? TrySelect(
-        IReadOnlyList<CoinCandidate> candidates,
+        IReadOnlyList<ExpiryBucket> buckets,
         SelectionContext context,
         CoinSelectionPolicy policy);
 }

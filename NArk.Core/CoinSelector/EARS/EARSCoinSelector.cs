@@ -17,7 +17,9 @@ public sealed class EARSCoinSelector : ICoinSelector
         _policy = policy ?? new CoinSelectionPolicy();
         _engine = new CoinSelectionEngine([
             new ExpiryFirstStrategy(),
-            new RgliStrategy()
+            new RgliStrategy(),
+            new SingleRandomDrawStrategy(),
+            new BranchAndBoundStrategy()
         ]);
     }
 

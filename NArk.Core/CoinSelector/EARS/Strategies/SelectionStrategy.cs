@@ -5,4 +5,5 @@ public enum SelectionStrategy
     ExpiryFirst,
     RGLI,
     SRD,
+    BnB
 }

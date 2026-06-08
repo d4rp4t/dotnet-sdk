@@ -30,7 +30,7 @@ public class ExpiryFirstStrategyTests
     {
         var candidates = new[] { EarsTestHelpers.Candidate(5000, expiry: 100u) };
 
-        var result = _strategy.TrySelect(candidates, Ctx(5000), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy());
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.IsValid, Is.True);
@@ -48,7 +48,7 @@ public class ExpiryFirstStrategyTests
             EarsTestHelpers.Candidate(2000, expiry: 100u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(7000), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(7000), Policy());
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.SelectedCoins, Has.Count.EqualTo(1));
@@ -64,7 +64,7 @@ public class ExpiryFirstStrategyTests
             EarsTestHelpers.Candidate(2000, expiry: 100u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(4000), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(4000), Policy());
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.SelectedCoins, Has.Count.EqualTo(2));
@@ -77,7 +77,7 @@ public class ExpiryFirstStrategyTests
         // 5000 - 4700 = 300 < 546 dust
         var candidates = new[] { EarsTestHelpers.Candidate(5000, expiry: 100u) };
 
-        var result = _strategy.TrySelect(candidates, Ctx(4700, allowSubDust: false), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(4700, allowSubDust: false), Policy());
 
         Assert.That(result, Is.Null);
     }
@@ -87,7 +87,7 @@ public class ExpiryFirstStrategyTests
     {
         var candidates = new[] { EarsTestHelpers.Candidate(5000, expiry: 100u) };
 
-        var result = _strategy.TrySelect(candidates, Ctx(4700, allowSubDust: true), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(4700, allowSubDust: true), Policy());
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.IsValid, Is.True);
@@ -102,7 +102,7 @@ public class ExpiryFirstStrategyTests
             EarsTestHelpers.Candidate(10000, expiry: 100u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(9000), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(9000), Policy());
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.ExpiryGroup, Is.EqualTo(100u));
@@ -118,7 +118,7 @@ public class ExpiryFirstStrategyTests
             EarsTestHelpers.Candidate(8000, expiry: 200u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(5000), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy());
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.ExpiryGroup, Is.EqualTo(200u));
@@ -134,7 +134,7 @@ public class ExpiryFirstStrategyTests
             EarsTestHelpers.Candidate(3000, expiry: 200u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(5000), Policy(allowMixingFallback: false));
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy(allowMixingFallback: false));
 
         Assert.That(result, Is.Null);
     }
@@ -148,7 +148,7 @@ public class ExpiryFirstStrategyTests
             EarsTestHelpers.Candidate(3000, expiry: 200u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(5000), Policy(allowMixingFallback: true));
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy(allowMixingFallback: true));
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.IsValid, Is.True);
@@ -161,7 +161,7 @@ public class ExpiryFirstStrategyTests
     {
         var candidates = new[] { EarsTestHelpers.Candidate(1000, expiry: 100u) };
 
-        var result = _strategy.TrySelect(candidates, Ctx(5000), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy());
 
         Assert.That(result, Is.Null);
     }
@@ -180,7 +180,7 @@ public class ExpiryFirstStrategyTests
             MaxSubDustOutputs: 1,
             AssetRequirements: []);
 
-        var result = _strategy.TrySelect(candidates, context, Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), context, Policy());
 
         // 3 coins × 100 = 300 < 500, cannot satisfy target within MaxInputs
         Assert.That(result, Is.Null);
@@ -224,7 +224,7 @@ public class RgliStrategyTests
             EarsTestHelpers.Candidate(2000, expiry: 100u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(5000), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy());
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.TotalValue, Is.GreaterThanOrEqualTo(Money.Satoshis(5000)));
@@ -244,7 +244,7 @@ public class RgliStrategyTests
             EarsTestHelpers.Candidate(1000, expiry: 100u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(5000), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy());
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.Change, Is.EqualTo(Money.Zero));
@@ -260,7 +260,7 @@ public class RgliStrategyTests
             EarsTestHelpers.Candidate(3000, expiry: 100u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(7000), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(7000), Policy());
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.IsValid, Is.True);
@@ -273,7 +273,7 @@ public class RgliStrategyTests
     {
         var candidates = new[] { EarsTestHelpers.Candidate(1000, expiry: 100u) };
 
-        var result = _strategy.TrySelect(candidates, Ctx(5000), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy());
 
         Assert.That(result, Is.Null);
     }
@@ -287,7 +287,7 @@ public class RgliStrategyTests
             EarsTestHelpers.Candidate(3000, expiry: 200u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(5000), Policy(allowMixingFallback: false));
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy(allowMixingFallback: false));
 
         Assert.That(result, Is.Null);
     }
@@ -301,11 +301,159 @@ public class RgliStrategyTests
             EarsTestHelpers.Candidate(3000, expiry: 200u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(5000), Policy(allowMixingFallback: true));
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy(allowMixingFallback: true));
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.IsValid, Is.True);
         Assert.That(result.ExpiryMixedFallback, Is.True);
+    }
+}
+
+[TestFixture]
+public class BranchAndBoundStrategyTests
+{
+    private static readonly Money Dust = Money.Satoshis(546);
+    private readonly BranchAndBoundStrategy _strategy = new();
+
+    private static SelectionContext Ctx(long targetSats, bool allowSubDust = false) =>
+        new(TargetAmount: Money.Satoshis(targetSats),
+            DustThreshold: Dust,
+            AllowExpiryMixing: false,
+            AllowSubDust: allowSubDust,
+            MaxInputs: 100,
+            CurrentSubDustOutputs: 0,
+            MaxSubDustOutputs: 1,
+            AssetRequirements: []);
+
+    private static CoinSelectionPolicy Policy(int maxBnBInputs = 12) =>
+        new(MaxBnBInputs: maxBnBInputs);
+
+    [Test]
+    public void FindsExactMatch_SingleCoin()
+    {
+        var candidates = new[]
+        {
+            EarsTestHelpers.Candidate(5000, expiry: 100u),
+            EarsTestHelpers.Candidate(3000, expiry: 100u),
+        };
+
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy());
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result!.Change, Is.EqualTo(Money.Zero));
+        Assert.That(result.SelectedCoins, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void FindsExactMatch_CombinationOfCoins()
+    {
+        var candidates = new[]
+        {
+            EarsTestHelpers.Candidate(3000, expiry: 100u),
+            EarsTestHelpers.Candidate(2000, expiry: 100u),
+            EarsTestHelpers.Candidate(1000, expiry: 100u),
+        };
+
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy());
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result!.Change, Is.EqualTo(Money.Zero));
+        Assert.That(result.TotalValue, Is.EqualTo(Money.Satoshis(5000)));
+    }
+
+    [Test]
+    public void PrefersExactMatch_OverLowerWasteWithChange()
+    {
+        // BnB should find 3000+2000=5000 (change=0) rather than 6000 (change=1000)
+        var candidates = new[]
+        {
+            EarsTestHelpers.Candidate(6000, expiry: 100u),
+            EarsTestHelpers.Candidate(3000, expiry: 100u),
+            EarsTestHelpers.Candidate(2000, expiry: 100u),
+        };
+
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy());
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result!.Change, Is.EqualTo(Money.Zero));
+    }
+
+    [Test]
+    public void FindsMinimalWaste_WhenNoExactMatch()
+    {
+        // No combination sums to exactly 5000.
+        // Options: 5800→change=800, 5600→change=600. BnB should pick 5600 (less waste).
+        // Note: 5000+400=5400 would be sub-dust (400<546), so 5600 is the true minimum above dust.
+        var candidates = new[]
+        {
+            EarsTestHelpers.Candidate(5800, expiry: 100u),
+            EarsTestHelpers.Candidate(5600, expiry: 100u),
+        };
+
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy());
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result!.Change, Is.EqualTo(Money.Satoshis(600)));
+    }
+
+    [Test]
+    public void RejectsDustChange_WhenNotAllowed()
+    {
+        // Only solution: 5200 (change=200 < 546 dust) — should be rejected
+        var candidates = new[] { EarsTestHelpers.Candidate(5200, expiry: 100u) };
+
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000, allowSubDust: false), Policy());
+
+        Assert.That(result, Is.Null);
+    }
+
+    [Test]
+    public void AcceptsDustChange_WhenAllowed()
+    {
+        var candidates = new[] { EarsTestHelpers.Candidate(5200, expiry: 100u) };
+
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000, allowSubDust: true), Policy());
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result!.Change, Is.EqualTo(Money.Satoshis(200)));
+    }
+
+    [Test]
+    public void SkipsGroup_WhenExceedsMaxBnBInputs()
+    {
+        // Group has 5 coins but MaxBnBInputs=3 — should be skipped entirely
+        var candidates = Enumerable.Range(0, 5)
+            .Select(_ => EarsTestHelpers.Candidate(2000, expiry: 100u))
+            .ToList();
+
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy(maxBnBInputs: 3));
+
+        Assert.That(result, Is.Null);
+    }
+
+    [Test]
+    public void PrefersEarliestExpiryGroup_WhenBothHaveExactMatch()
+    {
+        var candidates = new[]
+        {
+            EarsTestHelpers.Candidate(5000, expiry: 200u),
+            EarsTestHelpers.Candidate(5000, expiry: 100u),
+        };
+
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy());
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result!.ExpiryGroup, Is.EqualTo(100u));
+    }
+
+    [Test]
+    public void ReturnsNull_WhenInsufficientFunds()
+    {
+        var candidates = new[] { EarsTestHelpers.Candidate(1000, expiry: 100u) };
+
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy());
+
+        Assert.That(result, Is.Null);
     }
 }
 
@@ -337,7 +485,7 @@ public class SingleRandomDrawStrategyTests
             EarsTestHelpers.Candidate(3000, expiry: 100u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(4000), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(4000), Policy());
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.IsValid, Is.True);
@@ -353,7 +501,7 @@ public class SingleRandomDrawStrategyTests
             EarsTestHelpers.Candidate(3000, expiry: 100u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(7000), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(7000), Policy());
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.Change == Money.Zero || result.Change >= Dust, Is.True,
@@ -365,7 +513,7 @@ public class SingleRandomDrawStrategyTests
     {
         var candidates = new[] { EarsTestHelpers.Candidate(1000, expiry: 100u) };
 
-        var result = _strategy.TrySelect(candidates, Ctx(5000), Policy());
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy());
 
         Assert.That(result, Is.Null);
     }
@@ -379,7 +527,7 @@ public class SingleRandomDrawStrategyTests
             EarsTestHelpers.Candidate(3000, expiry: 200u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(5000), Policy(allowMixingFallback: false));
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy(allowMixingFallback: false));
 
         Assert.That(result, Is.Null);
     }
@@ -393,7 +541,7 @@ public class SingleRandomDrawStrategyTests
             EarsTestHelpers.Candidate(3000, expiry: 200u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(5000), Policy(allowMixingFallback: true));
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy(allowMixingFallback: true));
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.IsValid, Is.True);
@@ -409,7 +557,7 @@ public class SingleRandomDrawStrategyTests
             EarsTestHelpers.Candidate(6000, expiry: 200u),
         };
 
-        var result = _strategy.TrySelect(candidates, Ctx(5000), Policy(allowMixingFallback: true));
+        var result = _strategy.TrySelect(EarsTestHelpers.Buckets(candidates), Ctx(5000), Policy(allowMixingFallback: true));
 
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.ExpiryMixedFallback, Is.False);
@@ -418,6 +566,16 @@ public class SingleRandomDrawStrategyTests
 
 internal static class EarsTestHelpers
 {
+    internal static IReadOnlyList<ExpiryBucket> Buckets(IEnumerable<CoinCandidate> candidates) =>
+        candidates
+            .GroupBy(c => c.ExpiryGroup)
+            .OrderBy(g => g.Key)
+            .Select(g => new ExpiryBucket(
+                ExpiryGroup: g.Key,
+                Coins: g.OrderByDescending(c => c.Value).ToList(),
+                TotalValue: g.Sum(c => c.Value)))
+            .ToList();
+
     internal static CoinCandidate Candidate(long satoshis, uint expiry)
     {
         var key = new Key();
