@@ -564,6 +564,95 @@ public class SingleRandomDrawStrategyTests
     }
 }
 
+[TestFixture]
+public class CoinSelectionEngineTests
+{
+    [Test]
+    public void BuildBuckets_GroupsCloseExpiries_IntoSingleBucket()
+    {
+        var candidates = new[]
+        {
+            EarsTestHelpers.Candidate(1000, expiry: 100u),
+            EarsTestHelpers.Candidate(1000, expiry: 200u),  // 100 blocks apart — within 144
+            EarsTestHelpers.Candidate(1000, expiry: 244u),  // 144 blocks from 100 — still within window
+        };
+
+        var buckets = CoinSelectionEngine.BuildBuckets(candidates, windowBlocks: 144);
+
+        Assert.That(buckets, Has.Count.EqualTo(1));
+        Assert.That(buckets[0].Coins, Has.Count.EqualTo(3));
+        Assert.That(buckets[0].ExpiryGroup, Is.EqualTo(100u));
+    }
+
+    [Test]
+    public void BuildBuckets_SplitsBatches_WhenGapExceedsWindow()
+    {
+        var candidates = new[]
+        {
+            EarsTestHelpers.Candidate(1000, expiry: 100u),
+            EarsTestHelpers.Candidate(1000, expiry: 245u),  // 145 blocks from 100 — outside window
+        };
+
+        var buckets = CoinSelectionEngine.BuildBuckets(candidates, windowBlocks: 144);
+
+        Assert.That(buckets, Has.Count.EqualTo(2));
+        Assert.That(buckets[0].ExpiryGroup, Is.EqualTo(100u));
+        Assert.That(buckets[1].ExpiryGroup, Is.EqualTo(245u));
+    }
+
+    [Test]
+    public void BuildBuckets_OrdersBuckets_ByEarliestExpiryAscending()
+    {
+        var candidates = new[]
+        {
+            EarsTestHelpers.Candidate(1000, expiry: 500u),
+            EarsTestHelpers.Candidate(1000, expiry: 100u),
+            EarsTestHelpers.Candidate(1000, expiry: 1000u),
+        };
+
+        var buckets = CoinSelectionEngine.BuildBuckets(candidates, windowBlocks: 144);
+
+        Assert.That(buckets.Select(b => b.ExpiryGroup), Is.Ordered.Ascending);
+    }
+
+    [Test]
+    public void BuildBuckets_OrdersCoinsWithinBucket_ByValueDescending()
+    {
+        var candidates = new[]
+        {
+            EarsTestHelpers.Candidate(1000, expiry: 100u),
+            EarsTestHelpers.Candidate(5000, expiry: 100u),
+            EarsTestHelpers.Candidate(3000, expiry: 100u),
+        };
+
+        var buckets = CoinSelectionEngine.BuildBuckets(candidates, windowBlocks: 144);
+
+        Assert.That(buckets[0].Coins.Select(c => c.Value),
+            Is.EqualTo(new[] { Money.Satoshis(5000), Money.Satoshis(3000), Money.Satoshis(1000) }));
+    }
+
+    [Test]
+    public void BuildBuckets_MultipleBatches_WithGaps()
+    {
+        // Three separate batches: [100,120], [300,310], [600]
+        var candidates = new[]
+        {
+            EarsTestHelpers.Candidate(1000, expiry: 100u),
+            EarsTestHelpers.Candidate(1000, expiry: 120u),
+            EarsTestHelpers.Candidate(1000, expiry: 300u),
+            EarsTestHelpers.Candidate(1000, expiry: 310u),
+            EarsTestHelpers.Candidate(1000, expiry: 600u),
+        };
+
+        var buckets = CoinSelectionEngine.BuildBuckets(candidates, windowBlocks: 144);
+
+        Assert.That(buckets, Has.Count.EqualTo(3));
+        Assert.That(buckets[0].Coins, Has.Count.EqualTo(2));
+        Assert.That(buckets[1].Coins, Has.Count.EqualTo(2));
+        Assert.That(buckets[2].Coins, Has.Count.EqualTo(1));
+    }
+}
+
 internal static class EarsTestHelpers
 {
     internal static IReadOnlyList<ExpiryBucket> Buckets(IEnumerable<CoinCandidate> candidates) =>

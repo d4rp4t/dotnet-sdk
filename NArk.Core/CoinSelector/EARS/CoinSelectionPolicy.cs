@@ -8,4 +8,5 @@ public sealed record CoinSelectionPolicy(
     bool AllowRandomization = true,
     int RandomTopK = 3,
     int MaxBnBInputs = 12,
-    int MaxLocalSearchIterations = 50);
+    int MaxLocalSearchIterations = 50,
+    uint ExpiryWindowBlocks = 144); // ~24h: batches expiring within this window are grouped together
