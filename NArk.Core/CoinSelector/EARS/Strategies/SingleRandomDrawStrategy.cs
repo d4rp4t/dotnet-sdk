@@ -18,19 +18,22 @@ public sealed class SingleRandomDrawStrategy : ICoinSelectionStrategy
                 continue;
 
             var shuffled = bucket.Coins.OrderBy(_ => Random.Shared.Next()).ToList();
-            return Greedy(shuffled, context, bucket.ExpiryGroup, expiryMixed: false);
+            var result = Greedy(shuffled, context, policy, bucket.ExpiryGroup, expiryMixed: false);
+            if (result is not null)
+                return result;
         }
 
         if (!policy.AllowExpiryMixingFallback)
             return null;
 
         var all = buckets.SelectMany(b => b.Coins).OrderBy(_ => Random.Shared.Next()).ToList();
-        return Greedy(all, context, expiryGroup: 0u, expiryMixed: true);
+        return Greedy(all, context, policy, expiryGroup: 0u, expiryMixed: true);
     }
 
     private static SelectionResult? Greedy(
         List<CoinCandidate> coins,
         SelectionContext context,
+        CoinSelectionPolicy policy,
         uint expiryGroup,
         bool expiryMixed)
     {
@@ -60,7 +63,7 @@ public sealed class SingleRandomDrawStrategy : ICoinSelectionStrategy
                     Change: change,
                     ExpiryGroup: expiryGroup,
                     Strategy: SelectionStrategy.SRD,
-                    Waste: change,
+                    Waste: CoinSelectionEngine.ComputeWaste(change, selected.Count, policy),
                     IsValid: true,
                     ExpiryMixedFallback: expiryMixed);
         }

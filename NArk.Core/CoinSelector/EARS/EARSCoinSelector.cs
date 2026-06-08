@@ -32,7 +32,7 @@ public sealed class EARSCoinSelector : ICoinSelector
         int maxOpReturnOutputs = 1)
     {
         var context = BuildContext(targetAmount, dustThreshold, currentSubDustOutputs, maxOpReturnOutputs);
-        var candidates = BuildCandidates(availableCoins);
+        var candidates = BuildCandidates(availableCoins, dustThreshold);
         return _engine.Select(candidates, context, _policy).SelectedCoins;
     }
 
@@ -46,16 +46,16 @@ public sealed class EARSCoinSelector : ICoinSelector
         int maxOpReturnOutputs = 1)
     {
         var context = BuildContext(targetBtcAmount, dustThreshold, currentSubDustOutputs, maxOpReturnOutputs, assetRequirements);
-        var candidates = BuildCandidates(availableCoins);
+        var candidates = BuildCandidates(availableCoins, dustThreshold);
         return _engine.Select(candidates, context, _policy).SelectedCoins;
     }
 
-    private static IReadOnlyList<CoinCandidate> BuildCandidates(List<ArkCoin> coins) =>
+    private static IReadOnlyList<CoinCandidate> BuildCandidates(List<ArkCoin> coins, Money dustThreshold) =>
         coins.Select(c => new CoinCandidate(
             Coin: c,
             Value: c.TxOut.Value,
             ExpiryGroup: c.ExpiresAtHeight ?? 0u,
-            IsDustProne: c.TxOut.Value < 546,
+            IsDustProne: c.TxOut.Value < dustThreshold,
             Assets: c.Assets ?? [],
             Weight: c.TxOut.ScriptPubKey.Length))
         .ToList();

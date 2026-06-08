@@ -42,7 +42,7 @@ public sealed class RgliStrategy : ICoinSelectionStrategy
         for (var i = 0; i < policy.RandomTopK; i++)
         {
             var shuffled = coins.OrderBy(_ => Random.Shared.Next()).ToList();
-            var seed = GreedySeed(shuffled, context, expiryGroup, expiryMixed);
+            var seed = GreedySeed(shuffled, context, policy, expiryGroup, expiryMixed);
             if (seed is null)
                 continue;
 
@@ -56,6 +56,7 @@ public sealed class RgliStrategy : ICoinSelectionStrategy
     private static SelectionResult? GreedySeed(
         List<CoinCandidate> coins,
         SelectionContext context,
+        CoinSelectionPolicy policy,
         uint expiryGroup,
         bool expiryMixed)
     {
@@ -91,20 +92,20 @@ public sealed class RgliStrategy : ICoinSelectionStrategy
             Change: change,
             ExpiryGroup: expiryGroup,
             Strategy: SelectionStrategy.RGLI,
-            Waste: change,
+            Waste: CoinSelectionEngine.ComputeWaste(change, selected.Count, policy),
             IsValid: true,
             ExpiryMixedFallback: expiryMixed);
     }
 
     private static SelectionResult LocalImprove(
-        SelectionResult result,
+        SelectionResult seed,
         IReadOnlyList<CoinCandidate> allCoins,
         SelectionContext context,
         CoinSelectionPolicy policy,
         uint expiryGroup,
         bool expiryMixed)
     {
-        var selected = result.SelectedCoins.ToList();
+        var selected = seed.SelectedCoins.ToList();
 
         for (var iteration = 0; iteration < policy.MaxLocalSearchIterations; iteration++)
         {
@@ -119,7 +120,8 @@ public sealed class RgliStrategy : ICoinSelectionStrategy
 
                 if (newTotal >= context.TargetAmount
                     && (newChange == Money.Zero || newChange >= context.DustThreshold || context.AllowSubDust)
-                    && newChange < result.Change)
+                    && CoinSelectionEngine.ComputeWaste(newChange, withoutSmallest.Count, policy)
+                       < CoinSelectionEngine.ComputeWaste(selected.Sum(c => c.TxOut.Value) - context.TargetAmount, selected.Count, policy))
                 {
                     selected = withoutSmallest;
                     improved = true;
@@ -148,7 +150,8 @@ public sealed class RgliStrategy : ICoinSelectionStrategy
 
                     if (swappedTotal >= context.TargetAmount
                         && (swappedChange == Money.Zero || swappedChange >= context.DustThreshold || context.AllowSubDust)
-                        && swappedChange < currentChange)
+                        && CoinSelectionEngine.ComputeWaste(swappedChange, selected.Count, policy)
+                           < CoinSelectionEngine.ComputeWaste(currentChange, selected.Count, policy))
                     {
                         selected = selected
                             .Where(c => !ReferenceEquals(c, toRemove))
@@ -176,7 +179,7 @@ public sealed class RgliStrategy : ICoinSelectionStrategy
             Change: finalChange,
             ExpiryGroup: expiryGroup,
             Strategy: SelectionStrategy.RGLI,
-            Waste: finalChange,
+            Waste: CoinSelectionEngine.ComputeWaste(finalChange, selected.Count, policy),
             IsValid: true,
             ExpiryMixedFallback: expiryMixed);
     }

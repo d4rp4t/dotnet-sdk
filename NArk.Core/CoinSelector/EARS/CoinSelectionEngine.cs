@@ -53,7 +53,7 @@ public sealed class CoinSelectionEngine
         if (valid.Count == 0)
             throw new NotEnoughFundsException("No valid selection", null, context.TargetAmount);
 
-        var best = valid.OrderBy(r => r.Waste).ThenBy(r => r.SelectedCoins.Count).First();
+        var best = valid.MinBy(r => r.Waste)!;
 
         // Phase 4: merge asset coins with BTC selection.
         if (assetCoins.Count == 0)
@@ -156,6 +156,9 @@ public sealed class CoinSelectionEngine
 
         return buckets;
     }
+
+    internal static Money ComputeWaste(Money change, int inputCount, CoinSelectionPolicy policy) =>
+        change + Money.Satoshis(inputCount * policy.CostPerInputSats);
 
     private static ExpiryBucket MakeBucket(List<CoinCandidate> coins) =>
         new(ExpiryGroup: coins.Min(c => c.ExpiryGroup),

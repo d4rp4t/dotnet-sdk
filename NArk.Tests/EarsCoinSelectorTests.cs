@@ -232,7 +232,8 @@ public class RgliStrategyTests
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.TotalValue, Is.GreaterThanOrEqualTo(Money.Satoshis(5000)));
         Assert.That(result.Change, Is.EqualTo(Money.Zero).Or.GreaterThanOrEqualTo(Dust));
-        Assert.That(result.Waste, Is.LessThanOrEqualTo(Money.Satoshis(500)));
+        // Local improvement should drop the excess coin — 2-coin solution, not 3-coin
+        Assert.That(result.SelectedCoins.Count, Is.LessThanOrEqualTo(2));
     }
 
     [Test]
@@ -551,6 +552,26 @@ public class SingleRandomDrawStrategyTests
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.IsValid, Is.True);
         Assert.That(result.ExpiryMixedFallback, Is.True);
+    }
+
+    [Test]
+    public void ContinuesToNextBucket_WhenGreedyReturnsNull()
+    {
+        // First bucket has enough total but any random draw produces sub-dust change (5200-5000=200<546).
+        // Second bucket has an exact match. SRD must try second bucket, not return null.
+        var candidates = new[]
+        {
+            EarsTestHelpers.Candidate(5200, expiry: 100u), // change=200, sub-dust → Greedy returns null
+            EarsTestHelpers.Candidate(5000, expiry: 500u), // exact match
+        };
+
+        var result = _strategy.TrySelect(
+            EarsTestHelpers.Buckets(candidates),
+            Ctx(5000, allowSubDust: false),
+            Policy());
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result!.Change, Is.EqualTo(Money.Zero));
     }
 
     [Test]

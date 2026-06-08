@@ -14,7 +14,7 @@ public sealed class ExpiryFirstStrategy : ICoinSelectionStrategy
     {
         foreach (var bucket in buckets)
         {
-            var result = GreedyWithinGroup(bucket.Coins, context, bucket.ExpiryGroup, expiryMixed: false);
+            var result = GreedyWithinGroup(bucket.Coins, context, policy, bucket.ExpiryGroup, expiryMixed: false);
             if (result is not null)
                 return result;
         }
@@ -23,12 +23,13 @@ public sealed class ExpiryFirstStrategy : ICoinSelectionStrategy
             return null;
 
         var all = buckets.SelectMany(b => b.Coins).OrderByDescending(c => c.Value).ToList();
-        return GreedyWithinGroup(all, context, expiryGroup: 0u, expiryMixed: true);
+        return GreedyWithinGroup(all, context, policy, expiryGroup: 0u, expiryMixed: true);
     }
 
     private static SelectionResult? GreedyWithinGroup(
         IReadOnlyList<CoinCandidate> coins,
         SelectionContext context,
+        CoinSelectionPolicy policy,
         uint expiryGroup,
         bool expiryMixed)
     {
@@ -60,7 +61,7 @@ public sealed class ExpiryFirstStrategy : ICoinSelectionStrategy
                     Change: change,
                     ExpiryGroup: expiryGroup,
                     Strategy: SelectionStrategy.ExpiryFirst,
-                    Waste: change,
+                    Waste: CoinSelectionEngine.ComputeWaste(change, selected.Count, policy),
                     IsValid: true,
                     ExpiryMixedFallback: expiryMixed);
         }

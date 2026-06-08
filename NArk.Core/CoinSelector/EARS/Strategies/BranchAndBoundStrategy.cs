@@ -16,17 +16,32 @@ public sealed class BranchAndBoundStrategy : ICoinSelectionStrategy
 
         foreach (var bucket in buckets)
         {
-            if (bucket.Coins.Count > policy.MaxBnBInputs)
-                continue;
-
             var eligible = context.AllowDustInputs
                 ? bucket.Coins
                 : bucket.Coins.Where(c => !c.IsDustProne).ToList();
-            var result = SearchBnB(eligible, context, bucket.ExpiryGroup);
-            best = PickBetter(best, result);
+
+            if (eligible.Count > policy.MaxBnBInputs)
+                continue;
+
+            var result = SearchBnB(eligible, context, policy, bucket.ExpiryGroup, expiryMixed: false);
+            best = PickBetter(best, result, policy);
 
             if (best?.Change == Money.Zero)
-                break;
+                return best;
+        }
+
+        if (policy.AllowExpiryMixingFallback)
+        {
+            var allEligible = buckets
+                .SelectMany(b => b.Coins)
+                .Where(c => context.AllowDustInputs || !c.IsDustProne)
+                .ToList();
+
+            if (allEligible.Count <= policy.MaxBnBInputs)
+            {
+                var mixed = SearchBnB(allEligible, context, policy, expiryGroup: 0u, expiryMixed: true);
+                best = PickBetter(best, mixed, policy);
+            }
         }
 
         return best;
@@ -35,7 +50,9 @@ public sealed class BranchAndBoundStrategy : ICoinSelectionStrategy
     private static SelectionResult? SearchBnB(
         IReadOnlyList<CoinCandidate> coins,
         SelectionContext context,
-        uint expiryGroup)
+        CoinSelectionPolicy policy,
+        uint expiryGroup,
+        bool expiryMixed)
     {
         var suffix = new Money[coins.Count + 1];
         suffix[coins.Count] = Money.Zero;
@@ -58,22 +75,24 @@ public sealed class BranchAndBoundStrategy : ICoinSelectionStrategy
                 if (change > Money.Zero && change < context.DustThreshold && !context.AllowSubDust)
                     return;
 
-                if (bestWaste is null || change < bestWaste)
-                {
-                    bestWaste = change;
-                    var selected = new List<ArkCoin>(coins.Count);
-                    for (var i = 0; i < coins.Count; i++)
-                        if (included[i]) selected.Add(coins[i].Coin);
+                var selected = new List<ArkCoin>(coins.Count);
+                for (var i = 0; i < coins.Count; i++)
+                    if (included[i]) selected.Add(coins[i].Coin);
 
+                var waste = CoinSelectionEngine.ComputeWaste(change, selected.Count, policy);
+
+                if (bestWaste is null || waste < bestWaste)
+                {
+                    bestWaste = waste;
                     best = new SelectionResult(
                         SelectedCoins: selected,
                         TotalValue: sum,
                         Change: change,
                         ExpiryGroup: expiryGroup,
                         Strategy: SelectionStrategy.BnB,
-                        Waste: change,
+                        Waste: waste,
                         IsValid: true,
-                        ExpiryMixedFallback: false);
+                        ExpiryMixedFallback: expiryMixed);
                 }
                 return;
             }
@@ -96,7 +115,7 @@ public sealed class BranchAndBoundStrategy : ICoinSelectionStrategy
         return best;
     }
 
-    private static SelectionResult? PickBetter(SelectionResult? a, SelectionResult? b)
+    private static SelectionResult? PickBetter(SelectionResult? a, SelectionResult? b, CoinSelectionPolicy policy)
     {
         if (a is null) return b;
         if (b is null) return a;
