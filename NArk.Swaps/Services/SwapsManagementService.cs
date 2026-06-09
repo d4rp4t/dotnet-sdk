@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using BTCPayServer.Lightning;
 using Microsoft.Extensions.Logging;
 using NArk.Abstractions;
@@ -18,6 +20,7 @@ using NArk.Swaps.Models;
 using NArk.Core.Transport;
 using NArk.Swaps.Utils;
 using NBitcoin;
+using NBitcoin.Crypto;
 using NBitcoin.Scripting;
 using OutputDescriptorHelpers = NArk.Abstractions.Extensions.OutputDescriptorHelpers;
 
@@ -96,6 +99,62 @@ public class SwapsManagementService : IAsyncDisposable
     /// Returns all registered swap providers.
     /// </summary>
     public IReadOnlyList<ISwapProvider> Providers => _providers;
+
+    // BIP-340 sign+hash gives us a deterministic preimage rooted in the wallet's secret
+    // material without leaking the key (signatures reveal nothing about the key). The signed
+    // message bundles:
+    //   tag:        domain-separates this signature from any other use of the signing key
+    //               (versioned so a future scheme bump can coexist on recovery)
+    //   pubkey:     the descriptor's x-only public key — scopes the preimage to the swap
+    //               key. Canonical, unlike descriptor.ToString() (which differs between a
+    //               signing descriptor and the bare receiver descriptor a restore
+    //               reconstructs), so create-time and restore-time derive the same value.
+    //   index:      lets the caller derive multiple preimages from the same key; always 0
+    //               today, but baked into v1 so recovery iteration is forward-compatible
+    //               without a scheme bump
+    // Same (wallet, pubkey, index) → same signature → same preimage, so a restored
+    // wallet that rediscovers an outstanding swap via Boltz /v2/swap/restore can re-derive
+    // the preimage and claim the VHTLC. Watch-only and remote-signer-less wallets fall
+    // through to a random preimage.
+    //
+    // Local signing sources pass aux_rand=null to BIP-340, so signatures are deterministic.
+    // Remote-signer transports MUST honour the same convention or the preimage will rotate
+    // per call and recovery will silently fail — see IRemoteSignerTransport.SignAsync.
+    // Tag is protocol+provider scoped (Arkade brand, Boltz provider), not SDK-scoped, so any
+    // Arkade SDK implementing the same scheme produces the same preimage and can recover
+    // swaps the .NET SDK created (and vice versa). Versioned ("-v1") for future scheme evolution.
+    private const string PreimageTag = "Arkade-Boltz-Preimage-v1";
+    private static readonly byte[] PreimageTagBytes = Encoding.UTF8.GetBytes(PreimageTag);
+
+    // Builds the message that gets BIP-340-signed. Format (cross-SDK):
+    // PreimageTag || x-only pubkey (32B) || u32le(index). Anchoring on the canonical
+    // x-only key — not descriptor.ToString(), which is non-canonical and differs
+    // between a signing descriptor and a reconstructed bare receiver descriptor —
+    // keeps create-time and restore-time derivation identical and reproducible by any
+    // Arkade SDK.
+    internal static byte[] BuildPreimageMessage(OutputDescriptor descriptor, uint index)
+    {
+        var keyBytes = OutputDescriptorHelpers.Extract(descriptor).XOnlyPubKey.ToBytes();
+        var indexBytes = BitConverter.GetBytes(index);
+        if (!BitConverter.IsLittleEndian) Array.Reverse(indexBytes); // canonical u32 LE
+        var message = new byte[PreimageTagBytes.Length + keyBytes.Length + indexBytes.Length];
+        Buffer.BlockCopy(PreimageTagBytes, 0, message, 0, PreimageTagBytes.Length);
+        Buffer.BlockCopy(keyBytes, 0, message, PreimageTagBytes.Length, keyBytes.Length);
+        Buffer.BlockCopy(indexBytes, 0, message, PreimageTagBytes.Length + keyBytes.Length, indexBytes.Length);
+        return message;
+    }
+
+    private async Task<byte[]> DerivePreimageAsync(
+        string walletId, OutputDescriptor descriptor, uint index, CancellationToken cancellationToken)
+    {
+        var signer = await _walletProvider.GetSignerAsync(walletId, cancellationToken);
+        if (signer is null)
+            return RandomUtils.GetBytes(32); // watch-only — no entropy floor to draw from
+
+        var messageHash = new uint256(SHA256.HashData(BuildPreimageMessage(descriptor, index)));
+        var (_, sig) = await signer.Sign(descriptor, messageHash, cancellationToken);
+        return SHA256.HashData(sig.ToBytes());
+    }
 
     // ─── Event Routing ─────────────────────────────────────────────
 
@@ -270,10 +329,12 @@ public class SwapsManagementService : IAsyncDisposable
             walletId, invoiceParams.Amount);
         var addressProvider = await _walletProvider.GetAddressProviderAsync(walletId, cancellationToken);
         var destinationDescriptor = await addressProvider!.GetNextSigningDescriptor(cancellationToken);
+        var preimage = await DerivePreimageAsync(walletId, destinationDescriptor, index: 0, cancellationToken);
         var revSwap =
             await boltz.BoltzService.CreateReverseSwap(
                 invoiceParams,
                 destinationDescriptor,
+                preimage,
                 cancellationToken
             );
         await _contractService.ImportContract(walletId, revSwap.Contract,
@@ -323,9 +384,10 @@ public class SwapsManagementService : IAsyncDisposable
 
         var addressProvider = await _walletProvider.GetAddressProviderAsync(walletId, cancellationToken);
         var claimDescriptor = await addressProvider!.GetNextSigningDescriptor(cancellationToken);
+        var preimage = await DerivePreimageAsync(walletId, claimDescriptor, index: 0, cancellationToken);
 
         var result = await boltz.BoltzService.CreateBtcToArkSwapAsync(
-            amountSats, claimDescriptor, cancellationToken);
+            amountSats, claimDescriptor, preimage, cancellationToken);
 
         var btcAddress = result.Swap.LockupDetails?.LockupAddress
             ?? throw new InvalidOperationException("Missing BTC lockup address");
@@ -435,9 +497,10 @@ public class SwapsManagementService : IAsyncDisposable
 
         var addressProvider = await _walletProvider.GetAddressProviderAsync(walletId, cancellationToken);
         var refundDescriptor = await addressProvider!.GetNextSigningDescriptor(cancellationToken);
+        var preimage = await DerivePreimageAsync(walletId, refundDescriptor, index: 0, cancellationToken);
 
         var result = await boltz.BoltzService.CreateArkToBtcSwapAsync(
-            amountSats, refundDescriptor, cancellationToken);
+            amountSats, refundDescriptor, preimage, cancellationToken);
 
         var arkLockupAddressStr = result.Swap.LockupDetails!.LockupAddress;
         var arkAddress = ArkAddress.Parse(arkLockupAddressStr);
@@ -662,6 +725,32 @@ public class SwapsManagementService : IAsyncDisposable
                     ContractActivityState.Active,
                     metadata: new Dictionary<string, string> { ["Source"] = $"swap:{restored.Id}" },
                     cancellationToken: cancellationToken);
+
+                // Reverse swaps generated the preimage at create time via sign-and-hash of the
+                // receiver descriptor. On a fresh wallet that's rediscovering this swap via
+                // /v2/swap/restore, re-derive and attach so the sweeper can claim the VHTLC
+                // before it expires. Submarine swaps don't apply — Boltz controls that preimage.
+                if (restored.IsReverseSwap && !string.IsNullOrEmpty(restored.PreimageHash))
+                {
+                    // index=0 is the only value used at create-time today. If a future scheme
+                    // bump ships multi-preimage-per-descriptor, recovery should iterate
+                    // 0..MAX_INDEX here looking for a hash match.
+                    var derived = await DerivePreimageAsync(walletId, contract.Receiver, index: 0, cancellationToken);
+                    var derivedHashHex = Convert.ToHexString(Hashes.SHA256(derived)).ToLowerInvariant();
+                    if (string.Equals(derivedHashHex, restored.PreimageHash, StringComparison.OrdinalIgnoreCase))
+                    {
+                        swap = swap with
+                        {
+                            Metadata = new Dictionary<string, string>(swap.Metadata ?? new())
+                            {
+                                [SwapMetadata.Preimage] = Convert.ToHexString(derived).ToLowerInvariant()
+                            }
+                        };
+                    }
+                    // Hash mismatch → this swap wasn't created with the deterministic scheme
+                    // (legacy random preimage, or wrong descriptor was matched). Leave the
+                    // preimage out; EnrichReverseSwapPreimage remains the manual path.
+                }
             }
 
             await _swapsStorage.SaveSwap(walletId, swap, cancellationToken);
