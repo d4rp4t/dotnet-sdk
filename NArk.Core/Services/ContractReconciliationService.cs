@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
+using NArk.Abstractions;
 using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Wallets;
 using NArk.Core.Recovery;
@@ -9,7 +10,8 @@ namespace NArk.Core.Services;
 
 /// <summary>
 /// Keeps every SingleKey wallet's advertised "Default" contract aligned with the
-/// CURRENT arkd signer.
+/// CURRENT arkd signer, and flags any wallet whose Arkade sweep destination was
+/// orphaned by a signer rotation.
 /// <para>
 /// A SingleKey wallet's Default contract is derived from <c>ArkServerInfo.SignerKey</c>.
 /// When arkd rotates its signer, the old-signer Default becomes stale: the new-signer
@@ -23,6 +25,15 @@ namespace NArk.Core.Services;
 /// <item><see cref="IServerInfoCacheInvalidation.ServerInfoChanged"/> (signer rotated) → reconcile ALL SingleKey wallets.</item>
 /// <item>Startup pass on <see cref="StartAsync"/> → reconcile ALL SingleKey wallets (covers wallets rotated while offline).</item>
 /// </list>
+/// </para>
+/// <para>
+/// <b>Destination safety:</b> on the same triggers, for ANY wallet (SingleKey or HD) that has a
+/// sweep destination, if the destination's <see cref="ArkAddress"/> server key is now a deprecated
+/// signer the destination is flagged pending re-confirmation (a Metadata marker via
+/// <see cref="DestinationSafety"/>) and <see cref="IDestinationSafetyNotifier.DestinationDisabled"/>
+/// is raised once (on the set transition); a destination that is no longer stale clears the flag.
+/// <see cref="IWalletStorage.WalletSaved"/> therefore also enqueues HD wallets that carry a
+/// destination, so a re-save clears the flag.
 /// </para>
 /// <para>
 /// <b>Supersede semantics:</b> funds safety does NOT depend on the deactivation — the sweeper
@@ -42,8 +53,11 @@ public class ContractReconciliationService(
     IServerInfoCacheInvalidation serverInfoCacheInvalidation,
     IClientTransport clientTransport,
     ILogger<ContractReconciliationService>? logger = null,
-    TimeSpan? reconcileAllRetryDelay = null) : IAsyncDisposable
+    TimeSpan? reconcileAllRetryDelay = null) : IAsyncDisposable, IDestinationSafetyNotifier
 {
+    /// <inheritdoc/>
+    public event EventHandler<DestinationDisabledEventArgs>? DestinationDisabled;
+
     private const string SourceMetadataKey = "Source";
     private const string DefaultSourceValue = "Default";
 
@@ -164,8 +178,6 @@ public class ContractReconciliationService(
         var wallets = await walletStorage.LoadAllWallets(cancellationToken);
         foreach (var wallet in wallets)
         {
-            if (wallet.WalletType != WalletType.SingleKey)
-                continue;
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
@@ -195,6 +207,41 @@ public class ContractReconciliationService(
             logger?.LogDebug("Reconciliation skipped: wallet {WalletId} not found", walletId);
             return;
         }
+
+        // Destination-safety check: runs for any wallet type that has an Arkade destination.
+        ArkAddress.TryParse(wallet.Destination ?? string.Empty, out var dest);
+        if (dest is not null)
+        {
+            var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
+            var isStale = DestinationSafety.IsStale(dest, serverInfo);
+            var alreadyFlagged = wallet.Metadata?.ContainsKey(DestinationSafety.PendingConfirmationMetadataKey) == true;
+
+            if (isStale && !alreadyFlagged)
+            {
+                var deprecatedHex = Convert.ToHexString(dest.ServerKey.ToBytes()).ToLowerInvariant();
+                await walletStorage.SetMetadataValue(
+                    walletId, DestinationSafety.PendingConfirmationMetadataKey, deprecatedHex, cancellationToken);
+                DestinationDisabled?.Invoke(this, new DestinationDisabledEventArgs
+                {
+                    WalletId = wallet.Id,
+                    Destination = wallet.Destination!,
+                    DeprecatedServerKey = deprecatedHex,
+                });
+                logger?.LogWarning(
+                    "Arkade sweep destination for wallet {WalletId} is stale (deprecated server key {Key}); destination disabled pending re-confirmation",
+                    walletId, deprecatedHex);
+            }
+            else if (!isStale && alreadyFlagged)
+            {
+                await walletStorage.SetMetadataValue(
+                    walletId, DestinationSafety.PendingConfirmationMetadataKey, null, cancellationToken);
+                logger?.LogInformation(
+                    "Arkade sweep destination for wallet {WalletId} is no longer stale; cleared pending-confirmation flag",
+                    walletId);
+            }
+            // stale && alreadyFlagged → no-op (no duplicate event, no redundant write)
+        }
+
         if (wallet.WalletType != WalletType.SingleKey)
             return;
 
@@ -229,8 +276,9 @@ public class ContractReconciliationService(
 
     private void OnWalletSaved(object? sender, ArkWalletInfo wallet)
     {
-        // Cheap pre-filter so we don't enqueue work for HD wallets; the worker re-checks.
-        if (wallet.WalletType != WalletType.SingleKey)
+        // Enqueue for SingleKey wallets (default-contract reconciliation) and for any
+        // wallet with a non-empty Destination (destination-safety re-check on re-save).
+        if (wallet.WalletType != WalletType.SingleKey && string.IsNullOrEmpty(wallet.Destination))
             return;
         _jobs.Writer.TryWrite(new ReconcileWalletJob(wallet.Id));
     }
