@@ -38,6 +38,7 @@ file static class ChainSwapTestHelpers
         new(new HttpClient(), new OptionsWrapper<BoltzClientOptions>(BoltzOptions()));
 }
 
+[Category("Swaps")]
 public class ChainSwapTests
 {
     [Test]
@@ -488,7 +489,7 @@ public class ChainSwapTests
             testingPrerequisite.clientTransport, testingPrerequisite.vtxoStorage,
             testingPrerequisite.walletProvider, swapStorage, testingPrerequisite.contractService, testingPrerequisite.contracts,
             testingPrerequisite.safetyService, intentStorage, chainTimeProvider,
-            loggerFactory.CreateLogger<BoltzSwapProvider>());
+            logger: loggerFactory.CreateLogger<BoltzSwapProvider>());
         await using var swapMgr = new SwapsManagementService(
             new ISwapProvider[] { boltzProvider },
             spendingService, testingPrerequisite.clientTransport, testingPrerequisite.vtxoStorage,
@@ -903,9 +904,9 @@ public class ChainSwapTests
                 var status = await boltzClient.GetSwapStatusAsync(swapId, token);
                 Console.WriteLine($"[BTC→ARK refund] Boltz status: {status?.Status}");
                 lockupConfirmed = status?.Status is
-                    ChainSwapStatus.TransactionConfirmed or ChainSwapStatus.TransactionServerMempool or
-                    ChainSwapStatus.TransactionServerConfirmed or ChainSwapStatus.TransactionClaimPending or
-                    ChainSwapStatus.TransactionLockupFailed;
+                    BoltzSwapStatus.TransactionConfirmed or BoltzSwapStatus.TransactionServerMempool or
+                    BoltzSwapStatus.TransactionServerConfirmed or BoltzSwapStatus.TransactionClaimPending or
+                    BoltzSwapStatus.TransactionLockupFailed;
             }
             catch (Exception ex)
             {
@@ -1231,9 +1232,9 @@ public class ChainSwapTests
             {
                 var s = await boltzClient.GetSwapStatusAsync(swapId, token);
                 Console.WriteLine($"[ARK→BTC restart] pre-restart status: {s?.Status}");
-                lockupSeen = s?.Status is ChainSwapStatus.TransactionMempool or ChainSwapStatus.TransactionConfirmed
-                    or ChainSwapStatus.TransactionServerMempool or ChainSwapStatus.TransactionServerConfirmed
-                    or ChainSwapStatus.TransactionClaimPending;
+                lockupSeen = s?.Status is BoltzSwapStatus.TransactionMempool or BoltzSwapStatus.TransactionConfirmed
+                    or BoltzSwapStatus.TransactionServerMempool or BoltzSwapStatus.TransactionServerConfirmed
+                    or BoltzSwapStatus.TransactionClaimPending;
             }
             catch { /* ok — container might not yet have processed the lockup */ }
             if (!lockupSeen) await Task.Delay(TimeSpan.FromSeconds(3), token);

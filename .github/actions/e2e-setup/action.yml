@@ -1,0 +1,18 @@
+name: E2E Setup
+description: Configure .NET + Node, start regtest infrastructure, build. Requires checkout to have already run.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 9.0.x
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    - name: Start regtest infrastructure
+      shell: bash
+      run: node regtest/regtest.mjs start --profile boltz,delegate
+    - name: Restore and build
+      shell: bash
+      run: dotnet build
