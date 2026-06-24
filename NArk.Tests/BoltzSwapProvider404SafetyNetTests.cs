@@ -53,16 +53,10 @@ public class BoltzSwapProvider404SafetyNetTests
         var contractStorage = Substitute.For<IContractStorage>();
         var chainTime = Substitute.For<IBitcoinBlockchain>();
         var intentStorage = Substitute.For<IIntentStorage>();
-        var coinSelector = Substitute.For<ICoinSelector>();
-        var coinService = Substitute.For<ICoinService>();
-
-        var spendingService = new SpendingService(
-            vtxoStorage, contractStorage, walletProvider, coinService,
-            contractService, clientTransport, coinSelector, safetyService, intentStorage);
-
+        
         return new BoltzSwapProvider(boltzClient, limitsValidator, clientTransport,
             vtxoStorage, walletProvider, swapStorage, contractService, contractStorage,
-            safetyService, spendingService, intentStorage, chainTime);
+            safetyService, intentStorage, chainTime);
     }
 
     [Test]
