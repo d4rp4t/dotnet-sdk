@@ -34,14 +34,19 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
     {
         var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
         var mnemonic = new Mnemonic(Wordlist.English, WordCount.Twelve);
+        return CreateNewWallet(mnemonic, serverInfo.Network, clientTransport);
+    }
+
+    public static SimpleSeedWallet CreateNewWallet(Mnemonic mnemonic, Network network, IClientTransport clientTransport)
+    {
         var extKey = mnemonic.DeriveExtKey();
         var fingerprint = extKey.GetPublicKey().GetHDFingerPrint();
-        var coinType = serverInfo.Network.ChainName == ChainName.Mainnet ? "0" : "1";
+        var coinType = network.ChainName == ChainName.Mainnet ? "0" : "1";
 
         // BIP-86 Taproot: m/86'/coin'/0'
         var accountKeyPath = new KeyPath($"m/86'/{coinType}'/0'");
         var accountXpriv = extKey.Derive(accountKeyPath);
-        var accountXpub = accountXpriv.Neuter().GetWif(serverInfo.Network).ToWif();
+        var accountXpub = accountXpriv.Neuter().GetWif(network).ToWif();
 
         // Descriptor format: tr([fingerprint/86'/coin'/0']xpub/0/*)
         var descriptor = $"tr([{fingerprint}/86'/{coinType}'/0']{accountXpub}/0/*)";
