@@ -170,7 +170,7 @@ public class PreimageDerivationTests
     /// </summary>
     [TestCaseSource(nameof(LoadVectorsFromFixture))]
     public async Task DerivePreimage_MatchesPinnedVector(
-        string network, int keyIndex, uint preimageIndex,
+        string network, int keyIndex, uint derivationIndex,
         string expectedMessageHex, string expectedPreimageHex)
     {
         var net = network == "mainnet" ? Network.Main : Network.RegTest;
@@ -178,8 +178,8 @@ public class PreimageDerivationTests
         var svc = MakeService(new MockedSigningWalletProvider(wallet));
         var descriptor = MakeDescriptor(AbandonMnemonic, net, keyIndex);
 
-        var message = SwapsManagementService.BuildPreimageMessage(descriptor, preimageIndex);
-        var preimage = await svc.DerivePreimageAsync("wallet", descriptor, preimageIndex, CancellationToken.None);
+        var message = SwapsManagementService.BuildPreimageMessage(descriptor, derivationIndex);
+        var preimage = await svc.DerivePreimageAsync("wallet", descriptor, derivationIndex, CancellationToken.None);
 
         Assert.That(Convert.ToHexString(message).ToLowerInvariant(), Is.EqualTo(expectedMessageHex));
         Assert.That(Convert.ToHexString(preimage).ToLowerInvariant(), Is.EqualTo(expectedPreimageHex));
@@ -197,11 +197,11 @@ public class PreimageDerivationTests
             var keyIndex = int.Parse(keyProp.Name);
             foreach (var entry in keyProp.Value.EnumerateArray())
             {
-                var preimageIndex = entry.GetProperty("preimageIndex").GetUInt32();
+                var derivationIndex = entry.GetProperty("derivationIndex").GetUInt32();
                 var msg = entry.GetProperty("expectedPreimageMessage").GetString()!;
                 var pre = entry.GetProperty("expectedPreimage").GetString()!;
-                yield return new TestCaseData(networkName, keyIndex, preimageIndex, msg, pre)
-                    .SetName($"{networkName}_key{keyIndex}_preimage{preimageIndex}");
+                yield return new TestCaseData(networkName, keyIndex, derivationIndex, msg, pre)
+                    .SetName($"{networkName}_key{keyIndex}_derivation{derivationIndex}");
             }
         }
     }
