@@ -117,7 +117,9 @@ public class SwapsManagementService : IAsyncDisposable
     // the preimage and claim the VHTLC. Watch-only and remote-signer-less wallets fall
     // through to a random preimage.
     //
-    // Local signing sources pass aux_rand=null to BIP-340, so signatures are deterministic.
+    // Local signing sources MUST pass aux_rand=zeroes (32 zero bytes) to BIP-340 to produce
+    // deterministic signatures. ECPrivKey.SignBIP340(msg) without an explicit auxData draws
+    // from the system RNG on each call — pass SignBIP340(msg, new byte[32]) instead.
     // Remote-signer transports MUST honour the same convention or the preimage will rotate
     // per call and recovery will silently fail — see IRemoteSignerTransport.SignAsync.
     // Tag is protocol+provider scoped (Arkade brand, Boltz provider), not SDK-scoped, so any
