@@ -18,10 +18,10 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
     private readonly string _descriptor;
     private readonly string _mnemonic;
     private int _lastIndex;
-    private readonly IClientTransport _clientTransport;
+    private readonly IClientTransport? _clientTransport;
     private readonly ConcurrentDictionary<string, MusigPrivNonce> _secNonces = new();
 
-    private SimpleSeedWallet(string identifier, string descriptor, string mnemonic, int lastIndex, IClientTransport clientTransport)
+    private SimpleSeedWallet(string identifier, string descriptor, string mnemonic, int lastIndex, IClientTransport? clientTransport)
     {
         _identifier = identifier;
         _descriptor = descriptor;
@@ -30,6 +30,10 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
         _clientTransport = clientTransport;
     }
 
+    private IClientTransport RequireTransport() =>
+        _clientTransport ?? throw new InvalidOperationException(
+            "This SimpleSeedWallet was created for signing only and does not support transport-dependent operations.");
+
     public static async Task<SimpleSeedWallet> CreateNewWallet(IClientTransport clientTransport, CancellationToken cancellationToken = default)
     {
         var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
@@ -37,7 +41,15 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
         return CreateNewWallet(mnemonic, serverInfo.Network, clientTransport);
     }
 
-    public static SimpleSeedWallet CreateNewWallet(Mnemonic mnemonic, Network network, IClientTransport clientTransport)
+    /// <summary>
+    /// Creates a signing-only wallet without a client transport.
+    /// Only <see cref="Sign"/>, <see cref="GetPubKey"/>, <see cref="SignMusig"/>, and
+    /// <see cref="GenerateNonces"/> are available; methods that require server info will throw.
+    /// </summary>
+    public static SimpleSeedWallet CreateForSigning(Mnemonic mnemonic, Network network)
+        => CreateNewWallet(mnemonic, network, clientTransport: null);
+
+    public static SimpleSeedWallet CreateNewWallet(Mnemonic mnemonic, Network network, IClientTransport? clientTransport)
     {
         var extKey = mnemonic.DeriveExtKey();
         var fingerprint = extKey.GetPublicKey().GetHDFingerPrint();
@@ -107,8 +119,7 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
 
     public async Task<bool> IsOurs(OutputDescriptor descriptor, CancellationToken cancellationToken = default)
     {
-
-        var network = (await _clientTransport.GetServerInfoAsync(cancellationToken)).Network;
+        var network = (await RequireTransport().GetServerInfoAsync(cancellationToken)).Network;
         var index = descriptor.Extract().DerivationPath?.Indexes.Last().ToString();
         if (index is null)
         {
@@ -126,7 +137,7 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
 
     public async Task<OutputDescriptor> GetNextSigningDescriptor(CancellationToken cancellationToken = default)
     {
-        var network = (await _clientTransport.GetServerInfoAsync(cancellationToken)).Network;
+        var network = (await RequireTransport().GetServerInfoAsync(cancellationToken)).Network;
         return GetDescriptorFromIndex(network, _descriptor, _lastIndex++);
     }
 
@@ -136,7 +147,7 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
         ArkContract[]? inputContracts = null,
         CancellationToken cancellationToken = default)
     {
-        var serverInfo = await _clientTransport.GetServerInfoAsync(cancellationToken);
+        var serverInfo = await RequireTransport().GetServerInfoAsync(cancellationToken);
 
         if (purpose == NextContractPurpose.Boarding)
         {
@@ -169,7 +180,7 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
     /// </summary>
     public async Task<OutputDescriptor[]> GetUsedDescriptors(CancellationToken cancellationToken = default)
     {
-        var network = (await _clientTransport.GetServerInfoAsync(cancellationToken)).Network;
+        var network = (await RequireTransport().GetServerInfoAsync(cancellationToken)).Network;
         var descriptors = new List<OutputDescriptor>();
         for (int i = 0; i < _lastIndex; i++)
         {
