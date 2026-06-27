@@ -20,6 +20,8 @@ var builder = WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<App>("#app");
 builder.RootComponents.Add<HeadOutlet>("head::after");
 
+builder.Logging.AddFilter("NArk", LogLevel.Debug);
+
 // ── Network ──
 var networkConfig = ArkNetworkConfig.Mutinynet;
 
@@ -52,15 +54,19 @@ builder.Services.AddSingleton<IIntentScheduler, SimpleIntentScheduler>();
 builder.Services.AddSingleton<ISafetyService, WasmSafetyService>();
 builder.Services.AddSingleton<IBitcoinBlockchain>(sp =>
 {
-    if (!string.IsNullOrWhiteSpace(networkConfig.ExplorerUri))
+    if (!string.IsNullOrWhiteSpace(networkConfig.EsploraUri))
     {
-        var baseUri = networkConfig.ExplorerUri.TrimEnd('/') + "/api/";
+        var baseUri = networkConfig.EsploraUri.TrimEnd('/') + "/";
         return new EsploraBlockchain(new Uri(baseUri));
     }
     return new FallbackChainTimeProvider();
 });
 builder.Services.AddSingleton<IWalletProvider, DefaultWalletProvider>();
 builder.Services.AddSingleton<IAssetManager, AssetManager>();
+
+// ── Boarding UTXO sync (polls the chain for confirmed boarding UTXOs) ──
+builder.Services.AddSingleton<BoardingUtxoSyncService>();
+builder.Services.AddSingleton<BoardingUtxoPollService>();
 
 // ── Wallet service (replaces gateway API client) ──
 builder.Services.AddSingleton<ArkWalletService>();

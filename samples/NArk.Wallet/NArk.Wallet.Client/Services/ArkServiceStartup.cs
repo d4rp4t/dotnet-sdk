@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using NArk.Core.Services;
 using NArk.Swaps.Services;
 
@@ -12,6 +13,7 @@ public static class ArkServiceStartup
     public static async Task StartArkServicesAsync(this IServiceProvider services)
     {
         var cts = new CancellationTokenSource();
+        var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("ArkServiceStartup");
 
         // Start services in the same order as ArkHostedLifecycle
         var sweeper = services.GetRequiredService<SweeperService>();
@@ -33,7 +35,7 @@ public static class ArkServiceStartup
             var vtxoSync = services.GetRequiredService<VtxoSynchronizationService>();
             await vtxoSync.StartAsync(cts.Token);
         }
-        catch { /* Server subscription unavailable — VTXO sync will poll */ }
+        catch (Exception ex) { logger.LogWarning(ex, "VtxoSynchronizationService failed to start — falling back to polling"); }
 
         // Start swap management (monitors swap status, handles claims).
         // Non-fatal if Boltz is unreachable — swaps just won't be monitored until next app load.
@@ -42,6 +44,16 @@ public static class ArkServiceStartup
             var swapMgr = services.GetRequiredService<SwapsManagementService>();
             await swapMgr.StartAsync(cts.Token);
         }
-        catch { /* Boltz unavailable — swap monitoring disabled */ }
+        catch (Exception ex) { logger.LogWarning(ex, "SwapsManagementService failed to start"); }
+
+        // Poll boarding UTXOs from the chain. Non-fatal if explorer is unavailable.
+        try
+        {
+            logger.LogInformation("Starting BoardingUtxoPollService...");
+            var boardingPoll = services.GetRequiredService<BoardingUtxoPollService>();
+            await boardingPoll.StartAsync(cts.Token);
+            logger.LogInformation("BoardingUtxoPollService started successfully");
+        }
+        catch (Exception ex) { logger.LogError(ex, "BoardingUtxoPollService failed to start"); }
     }
 }
