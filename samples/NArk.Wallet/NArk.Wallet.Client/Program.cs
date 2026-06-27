@@ -12,7 +12,6 @@ using NArk.Core.Wallet;
 using NArk.Core.Payments;
 using NArk.Hosting;
 using NArk.Storage.EfCore.Hosting;
-using NArk.Swaps.Hosting;
 using NArk.Wallet.Client;
 using NArk.Wallet.Client.Services;
 
@@ -21,6 +20,7 @@ builder.RootComponents.Add<App>("#app");
 builder.RootComponents.Add<HeadOutlet>("head::after");
 
 builder.Logging.AddFilter("NArk", LogLevel.Debug);
+builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.Warning);
 
 // ── Network ──
 var networkConfig = ArkNetworkConfig.Mutinynet;
@@ -50,6 +50,12 @@ builder.Services.AddSingleton<NArk.Swaps.Boltz.Client.BoltzClient>(sp =>
     sp.GetRequiredService<NArk.Swaps.Boltz.Client.CachedBoltzClient>());
 
 // ── SDK infrastructure ──
+builder.Services.Configure<NArk.Core.Models.Options.SimpleIntentSchedulerOptions>(opts =>
+{
+    // Trigger re-boarding for VTXOs expiring within 7 days.
+    // Boarding UTXOs (Unrolled=true) are always batched regardless of this threshold.
+    opts.Threshold = TimeSpan.FromDays(7);
+});
 builder.Services.AddSingleton<IIntentScheduler, SimpleIntentScheduler>();
 builder.Services.AddSingleton<ISafetyService, WasmSafetyService>();
 builder.Services.AddSingleton<IBitcoinBlockchain>(sp =>
