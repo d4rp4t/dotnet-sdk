@@ -56,6 +56,15 @@ builder.Services.Configure<NArk.Core.Models.Options.SimpleIntentSchedulerOptions
     // Boarding UTXOs (Unrolled=true) are always batched regardless of this threshold.
     opts.Threshold = TimeSpan.FromDays(1);
 });
+
+if (networkConfig == ArkNetworkConfig.Mutinynet)
+{
+    builder.Services.Configure<NArk.Core.Models.Options.IntentGenerationServiceOptions>(opts =>
+    {
+        opts.PollInterval = TimeSpan.FromSeconds(30);
+    });
+}
+
 builder.Services.AddSingleton<IIntentScheduler, SimpleIntentScheduler>();
 builder.Services.AddSingleton<ISafetyService, WasmSafetyService>();
 builder.Services.AddSingleton<IBitcoinBlockchain>(sp =>
