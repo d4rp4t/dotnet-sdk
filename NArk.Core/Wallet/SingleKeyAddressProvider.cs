@@ -4,7 +4,6 @@ using NArk.Abstractions.Contracts;
 using NArk.Abstractions.Extensions;
 using NArk.Abstractions.Wallets;
 using NArk.Core.Contracts;
-using NArk.Core.Enums;
 using NArk.Core.Transport;
 using NBitcoin;
 using NBitcoin.Scripting;
@@ -53,32 +52,30 @@ public class SingleKeyAddressProvider(
     {
         var info = await transport.GetServerInfoAsync(cancellationToken);
         var signingDescriptor = await GetNextSigningDescriptor(cancellationToken);
-        ArkContract? result = null;
-        if (purpose == NextContractPurpose.Boarding)
+        
+        (ArkContract contract, ContractActivityState state) = purpose switch
         {
-            result = new ArkBoardingContract(info.SignerKey, info.BoardingExit, signingDescriptor);
-        }
-        else if (purpose == NextContractPurpose.SendToSelf && sweepingAddress is not null)
-        {
-            result = new UnknownArkContract(sweepingAddress, info.SignerKey, info.Network.ChainName == ChainName.Mainnet);
-            activityState = ContractActivityState.Inactive;
-        }
-        else if (purpose == NextContractPurpose.SendToSelf)
-        {
-            result = new ArkPaymentContract(info.SignerKey, info.UnilateralExit, signingDescriptor);
-            activityState = ContractActivityState.Active;
-        }
+            NextContractPurpose.Boarding => (
+                (ArkContract)new ArkBoardingContract(info.SignerKey, info.BoardingExit, signingDescriptor),
+                activityState),
 
-        result ??= new HashLockedArkPaymentContract(
-            info.SignerKey,
-            info.UnilateralExit,
-            signingDescriptor,
-            RandomUtils.GetBytes(32),
-            HashLockTypeOption.Hash160
-        );
-        var entity = result.ToEntity(wallet.Id, info.SignerKey, null, activityState);
-        if (result is UnknownArkContract)
+            // Collaborative-exit sweep target: a fixed external address, never tracked.
+            NextContractPurpose.SendToSelf when sweepingAddress is not null => (
+                new UnknownArkContract(sweepingAddress, info.SignerKey, info.Network.ChainName == ChainName.Mainnet),
+                ContractActivityState.Inactive),
+
+            NextContractPurpose.SendToSelf => (
+                new ArkPaymentContract(info.SignerKey, info.UnilateralExit, signingDescriptor),
+                ContractActivityState.Active),
+
+            _ => (
+                new ArkPaymentContract(info.SignerKey, info.UnilateralExit, signingDescriptor),
+                activityState),
+        };
+
+        var entity = contract.ToEntity(wallet.Id, info.SignerKey, null, state);
+        if (contract is UnknownArkContract)
             entity = entity with { Metadata = new Dictionary<string, string> { ["Source"] = "sweep-destination" } };
-        return (result, entity);
+        return (contract, entity);
     }
 }
