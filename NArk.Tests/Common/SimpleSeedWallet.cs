@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using NArk.Abstractions.Contracts;
+using NArk.Abstractions.Extensions;
 using NArk.Abstractions.Wallets;
 using NArk.Core.Contracts;
-using NArk.Abstractions.Extensions;
 using NArk.Core.Transport;
 using NBitcoin;
 using NBitcoin.Scripting;
@@ -10,7 +10,7 @@ using NBitcoin.Secp256k1;
 using NBitcoin.Secp256k1.Musig;
 using OutputDescriptorHelpers = NArk.Abstractions.Extensions.OutputDescriptorHelpers;
 
-namespace NArk.Tests.End2End.Wallets;
+namespace NArk.Tests.Common;
 
 public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
 {
@@ -18,10 +18,10 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
     private readonly string _descriptor;
     private readonly string _mnemonic;
     private int _lastIndex;
-    private readonly IClientTransport _clientTransport;
+    private readonly IClientTransport? _clientTransport;
     private readonly ConcurrentDictionary<string, MusigPrivNonce> _secNonces = new();
 
-    private SimpleSeedWallet(string identifier, string descriptor, string mnemonic, int lastIndex, IClientTransport clientTransport)
+    private SimpleSeedWallet(string identifier, string descriptor, string mnemonic, int lastIndex, IClientTransport? clientTransport)
     {
         _identifier = identifier;
         _descriptor = descriptor;
@@ -30,25 +30,42 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
         _clientTransport = clientTransport;
     }
 
+    private IClientTransport RequireTransport() =>
+        _clientTransport ?? throw new InvalidOperationException(
+            "This SimpleSeedWallet was created for signing only and does not support transport-dependent operations.");
+
     public static async Task<SimpleSeedWallet> CreateNewWallet(IClientTransport clientTransport, CancellationToken cancellationToken = default)
     {
         var serverInfo = await clientTransport.GetServerInfoAsync(cancellationToken);
         var mnemonic = new Mnemonic(Wordlist.English, WordCount.Twelve);
+        return CreateNewWallet(mnemonic, serverInfo.Network, clientTransport);
+    }
+
+    /// <summary>
+    /// Creates a signing-only wallet without a client transport.
+    /// Only <see cref="Sign"/>, <see cref="GetPubKey"/>, <see cref="SignMusig"/>, and
+    /// <see cref="GenerateNonces"/> are available; methods that require server info will throw.
+    /// </summary>
+    public static SimpleSeedWallet CreateForSigning(Mnemonic mnemonic, Network network)
+        => CreateNewWallet(mnemonic, network, clientTransport: null);
+
+    public static SimpleSeedWallet CreateNewWallet(Mnemonic mnemonic, Network network, IClientTransport? clientTransport)
+    {
         var extKey = mnemonic.DeriveExtKey();
         var fingerprint = extKey.GetPublicKey().GetHDFingerPrint();
-        var coinType = serverInfo.Network.ChainName == ChainName.Mainnet ? "0" : "1";
+        var coinType = network.ChainName == ChainName.Mainnet ? "0" : "1";
 
         // BIP-86 Taproot: m/86'/coin'/0'
         var accountKeyPath = new KeyPath($"m/86'/{coinType}'/0'");
         var accountXpriv = extKey.Derive(accountKeyPath);
-        var accountXpub = accountXpriv.Neuter().GetWif(serverInfo.Network).ToWif();
+        var accountXpub = accountXpriv.Neuter().GetWif(network).ToWif();
 
         // Descriptor format: tr([fingerprint/86'/coin'/0']xpub/0/*)
         var descriptor = $"tr([{fingerprint}/86'/{coinType}'/0']{accountXpub}/0/*)";
 
         return new SimpleSeedWallet(fingerprint.ToString(), descriptor, mnemonic.ToString(), 0, clientTransport);
     }
-
+    
     public async Task<string> GetWalletFingerprint(CancellationToken cancellationToken = default)
     {
         return _identifier;
@@ -83,7 +100,7 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
     {
         var privKey = await DerivePrivateKey(descriptor, cancellationToken);
 
-        return (privKey.CreateXOnlyPubKey(), privKey.SignBIP340(hash.ToBytes()));
+        return (privKey.CreateXOnlyPubKey(), privKey.SignBIP340(hash.ToBytes(), new byte[32]));
     }
 
     public async Task<MusigPubNonce> GenerateNonces(OutputDescriptor descriptor, MusigContext context,
@@ -102,8 +119,7 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
 
     public async Task<bool> IsOurs(OutputDescriptor descriptor, CancellationToken cancellationToken = default)
     {
-
-        var network = (await _clientTransport.GetServerInfoAsync(cancellationToken)).Network;
+        var network = (await RequireTransport().GetServerInfoAsync(cancellationToken)).Network;
         var index = descriptor.Extract().DerivationPath?.Indexes.Last().ToString();
         if (index is null)
         {
@@ -121,7 +137,7 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
 
     public async Task<OutputDescriptor> GetNextSigningDescriptor(CancellationToken cancellationToken = default)
     {
-        var network = (await _clientTransport.GetServerInfoAsync(cancellationToken)).Network;
+        var network = (await RequireTransport().GetServerInfoAsync(cancellationToken)).Network;
         return GetDescriptorFromIndex(network, _descriptor, _lastIndex++);
     }
 
@@ -131,7 +147,7 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
         ArkContract[]? inputContracts = null,
         CancellationToken cancellationToken = default)
     {
-        var serverInfo = await _clientTransport.GetServerInfoAsync(cancellationToken);
+        var serverInfo = await RequireTransport().GetServerInfoAsync(cancellationToken);
 
         if (purpose == NextContractPurpose.Boarding)
         {
@@ -164,7 +180,7 @@ public class SimpleSeedWallet : IArkadeWalletSigner, IArkadeAddressProvider
     /// </summary>
     public async Task<OutputDescriptor[]> GetUsedDescriptors(CancellationToken cancellationToken = default)
     {
-        var network = (await _clientTransport.GetServerInfoAsync(cancellationToken)).Network;
+        var network = (await RequireTransport().GetServerInfoAsync(cancellationToken)).Network;
         var descriptors = new List<OutputDescriptor>();
         for (int i = 0; i < _lastIndex; i++)
         {
