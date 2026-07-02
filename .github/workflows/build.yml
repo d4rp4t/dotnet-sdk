@@ -16,17 +16,13 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: |
-            9.0.x
-            10.0.x
-      - name: Install workloads
-        run: dotnet workload install wasm-tools
+          dotnet-version: 9.0.x
       - name: Restore dependencies
-        run: dotnet restore
+        run: dotnet restore NArk.CI.slnf
       - name: Build
-        run: dotnet build --no-restore
+        run: dotnet build NArk.CI.slnf --no-restore
       - name: Unit Tests
-        run: dotnet test --no-build --verbosity normal --filter "FullyQualifiedName!~End2End"
+        run: dotnet test NArk.CI.slnf --no-build --verbosity normal --filter "FullyQualifiedName!~End2End"
 
   e2e:
     needs: build
@@ -59,15 +55,11 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: |
-            9.0.x
-            10.0.x
-      - name: Install workloads
-        run: dotnet workload install wasm-tools
+          dotnet-version: 9.0.x
       - name: Restore dependencies
-        run: dotnet restore
+        run: dotnet restore NArk.CI.slnf
       - name: Pack
-        run: dotnet pack -c Release -o dist/
+        run: dotnet pack NArk.CI.slnf -c Release -o dist/
       - name: Push to NuGet
         run: dotnet nuget push "dist/*.nupkg" --skip-duplicate -k ${{secrets.NUGET_API_KEY}} -s https://api.nuget.org/v3/index.json
       - name: Tag per NuGet package
